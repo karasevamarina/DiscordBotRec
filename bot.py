@@ -13,14 +13,13 @@ OWNER_ID = 123456789012345678
 # --- SETUP ---
 intents = discord.Intents.default()
 intents.message_content = True 
-# We need 'members' intent to find you in servers
-intents.members = True 
+intents.members = True # REQUIRED to find you in servers
 
 bot = commands.Bot(command_prefix='+', intents=intents, help_command=None)
 
 # --- CHECKS ---
 def is_owner_check(ctx):
-    # REMOVED the check that blocked DMs
+    # SIMPLE CHECK: Is it you? If yes, allow it (even in DMs).
     return ctx.author.id == OWNER_ID
 
 # --- HELPER FUNCTIONS ---
@@ -50,38 +49,35 @@ async def finished_callback(sink, dest_channel, *args):
 @commands.check(is_owner_check)
 async def help(ctx):
     embed = discord.Embed(title="🎙️ DM Recorder Bot", color=discord.Color.green())
-    embed.description = "You can control me from here!"
-    embed.add_field(name="+join", value="I will find you in any server and join.", inline=False)
-    embed.add_field(name="+joinid <id>", value="Force join a specific channel ID.", inline=False)
+    embed.description = "Control me from DMs!"
+    embed.add_field(name="+join", value="I'll search for you in servers and join.", inline=False)
+    embed.add_field(name="+joinid <id>", value="Force join a Channel ID.", inline=False)
     embed.add_field(name="+record", value="Start recording.", inline=False)
-    embed.add_field(name="+stop", value="Stop & Upload to DM.", inline=False)
+    embed.add_field(name="+stop", value="Stop & Upload here.", inline=False)
     await ctx.send(embed=embed)
 
 @bot.command()
 @commands.check(is_owner_check)
 async def join(ctx):
     """Smart Join: Finds you in any server"""
+    await ctx.send("🔍 Scanning servers to find you...")
     
-    # 1. If command is used INSIDE a server
-    if ctx.guild and ctx.author.voice:
-        await ctx.author.voice.channel.connect()
-        return await ctx.send(f"👍 Joined **{ctx.author.voice.channel.name}**!")
-
-    # 2. If command is used in DM -> Search for user
-    await ctx.send("🔍 Searching servers to find you...")
-    
+    # Loop through every server the bot is in
     for guild in bot.guilds:
-        # Try to find the member in this guild
+        # Check if you (the owner) are in this guild
         member = guild.get_member(ctx.author.id)
+        
+        # If found AND you are in a voice channel
         if member and member.voice:
             await member.voice.channel.connect()
             return await ctx.send(f"👍 Found you in **{guild.name}**! Joined **{member.voice.channel.name}**.")
 
-    await ctx.send("❌ I couldn't find you in any Voice Channel. Are you sure you are connected?")
+    await ctx.send("❌ I couldn't find you in any Voice Channel. Make sure you are connected first!")
 
 @bot.command()
 @commands.check(is_owner_check)
 async def joinid(ctx, channel_id: str):
+    """Force join a specific channel ID"""
     try:
         c_id = int(channel_id)
         channel = bot.get_channel(c_id)
@@ -96,24 +92,16 @@ async def joinid(ctx, channel_id: str):
 @bot.command()
 @commands.check(is_owner_check)
 async def record(ctx):
-    # Find the active voice client (Bot can only be in one place usually)
-    vc = None
-    
-    # If in server, easy find
-    if ctx.guild:
-        vc = ctx.voice_client
-    # If in DM, find the first active connection
-    else:
-        if len(bot.voice_clients) > 0:
-            vc = bot.voice_clients[0]
-
-    if not vc:
+    # Find the active voice connection
+    if len(bot.voice_clients) == 0:
         return await ctx.send("❌ I am not connected to any VC.")
+    
+    vc = bot.voice_clients[0]
     
     if vc.recording:
         return await ctx.send("Already recording!")
 
-    # Start recording and tell it to send files to ctx.channel (Your DM)
+    # Start recording and tell it to send files to YOUR DM (ctx.channel)
     vc.start_recording(
         discord.sinks.MP3Sink(), 
         finished_callback, 
@@ -127,32 +115,26 @@ async def record(ctx):
 @bot.command()
 @commands.check(is_owner_check)
 async def stop(ctx):
-    # Find the active voice client
-    vc = None
-    if ctx.guild:
-        vc = ctx.voice_client
-    else:
-        if len(bot.voice_clients) > 0:
-            vc = bot.voice_clients[0]
+    if len(bot.voice_clients) == 0:
+        return await ctx.send("I am not connected.")
 
-    if vc:
-        if vc.recording:
-            vc.stop_recording()
-            await ctx.send("🛑 **Stopping...** (Uploading to DM...)")
+    vc = bot.voice_clients[0]
+
+    if vc.recording:
+        vc.stop_recording()
+        await ctx.send("🛑 **Stopping...** (Uploading to DM...)")
         
-        # Wait a moment before disconnecting to ensure callback runs
-        import asyncio
-        await asyncio.sleep(1)
-        await vc.disconnect()
-    else:
-        await ctx.send("I am not connected.")
+    # Wait 1 second before leaving so the file upload doesn't get cut off
+    import asyncio
+    await asyncio.sleep(1)
+    await vc.disconnect()
 
 @bot.event
 async def on_command_error(ctx, error):
+    # If a command fails, print it so we can see why in the logs
+    print(f"Error: {error}")
     if isinstance(error, commands.CheckFailure):
-        pass # Ignore strangers
-    else:
-        print(f"Error: {error}")
+        pass
 
 if __name__ == "__main__":
     if not TOKEN:
