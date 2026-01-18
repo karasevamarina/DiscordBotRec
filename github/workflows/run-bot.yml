@@ -1,0 +1,33 @@
+name: Voice Recorder Bot
+
+on:
+  workflow_dispatch: # Allows you to manually click "Run"
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+
+    # Install FFmpeg (Critical for audio recording)
+    - name: Install System Dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y ffmpeg
+
+    - name: Install Python Libraries
+      run: |
+        pip install -r requirements.txt
+
+    - name: Run Bot
+      env:
+        DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
+      run: |
+        python bot.py
