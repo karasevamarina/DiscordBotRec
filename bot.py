@@ -10,22 +10,22 @@ import urllib.request
 import aiohttp 
 
 # ==========================================
-# 🥷 THE "TOKEN SWAP" PATCH (Bypasses Library Headers)
+# ☢️ THE "NUCLEAR" PATCH (Direct API Sending)
 # ==========================================
 
-# 1. Login Patch (Sets up the User Session)
+# 1. Login Patch (Standard User Token Login)
 async def patched_login(self, token):
-    # Remove whitespace AND quotes (Fixes common secrets issues)
     self.token = token.strip().strip('"')
-    self._token_type = "" 
+    self._token_type = ""
     
+    # Create Session manually
     if not hasattr(self, '_HTTPClient__session') or getattr(self, '_HTTPClient__session').__class__.__name__ == '_MissingSentinel':
         self._HTTPClient__session = aiohttp.ClientSession()
 
     # Fetch Real Data
     req = urllib.request.Request("https://discord.com/api/v9/users/@me")
     req.add_header("Authorization", self.token)
-    req.add_header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
+    req.add_header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
     
     try:
         with urllib.request.urlopen(req) as response:
@@ -35,39 +35,64 @@ async def patched_login(self, token):
             raise discord.LoginFailure("Invalid User Token.")
         raise
 
-# 2. Request Patch (The Swap Trick)
+# 2. THE NEW SEND FUNCTION (Bypasses Library Completely)
+async def direct_send(self, content=None, **kwargs):
+    # This replaces ctx.send()
+    channel_id = self.id
+    url = f"https://discord.com/api/v9/channels/{channel_id}/messages"
+    
+    # Build payload
+    payload = {}
+    if content:
+        payload['content'] = str(content)
+        
+    # Get the global bot instance to access the token/session
+    global bot
+    headers = {
+        "Authorization": bot.http.token,
+        "Content-Type": "application/json",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+    }
+
+    # Files handling (Multipart) is complex, so for simplicity in this patch
+    # we handle TEXT only via JSON, and FILES if provided via standard library logic
+    # BUT, to fix your error, we prioritize the text-only JSON send first.
+    
+    session = bot.http._HTTPClient__session
+    
+    if kwargs.get('files'):
+        # If sending files (like the recording), we let the library try its best
+        # but we patch the headers in 'patched_request' below as a backup.
+        return await original_send(self, content, **kwargs)
+        
+    async with session.post(url, json=payload, headers=headers) as resp:
+        if resp.status == 401:
+            print("❌ Critical: 401 Unauthorized even on direct send.")
+        return await resp.json()
+
+# 3. Patch Request (Backup for Files/Voice)
 original_request = discord.http.HTTPClient.request
-
 async def patched_request(self, route, **kwargs):
-    # A. PREPARE HEADERS
     headers = kwargs.get('headers', {})
-    headers['User-Agent'] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-    headers['Authorization'] = self.token # Put our clean token here
+    headers['Authorization'] = self.token
+    headers['User-Agent'] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
     kwargs['headers'] = headers
-
-    # B. HIDE TOKEN FROM LIBRARY
-    # We temporarily set self.token to None. 
-    # This prevents the library's internal logic from adding "Bot <token>"
-    real_token = self.token
-    self.token = None 
     
     try:
-        # C. SEND REQUEST (Library sees no token, so it doesn't touch headers)
         return await original_request(self, route, **kwargs)
-        
     except discord.HTTPException as e:
-        # Silence 401s for Bot-only features
-        if e.status == 401 and ("/applications/" in route.path or "soundboard" in route.path or "interaction" in route.path):
+        if e.status == 401 and ("/applications/" in route.path or "soundboard" in route.path):
             return []
         raise e
-        
-    finally:
-        # D. RESTORE TOKEN (Very Important!)
-        self.token = real_token
 
 # Apply Patches
 discord.http.HTTPClient.static_login = patched_login
 discord.http.HTTPClient.request = patched_request
+
+# Save original send to use for files later
+original_send = discord.abc.Messageable.send
+# Overwrite send with our direct sender
+discord.abc.Messageable.send = direct_send
 # ==========================================
 
 # --- CONFIGURATION ---
@@ -81,8 +106,9 @@ bot = commands.Bot(command_prefix='+', intents=intents, help_command=None)
 
 # --- HELPER FUNCTIONS ---
 async def finished_callback(sink, dest_channel, *args):
-    # Plain text response
-    await dest_channel.send("✅ **Recording finished.** Processing filenames...")
+    # We use the ORIGINAL send for files because it handles multipart upload complex logic
+    # The patched_request header fix above should handle the auth for this part.
+    await original_send(dest_channel, "✅ **Recording finished.** Processing filenames...")
     
     files = []
     ist = pytz.timezone('Asia/Kolkata')
@@ -103,16 +129,16 @@ async def finished_callback(sink, dest_channel, *args):
         files.append(discord.File(audio.file, filename))
 
     if files:
-        await dest_channel.send(f"Here are the recordings:", files=files)
+        await original_send(dest_channel, "Here are the recordings:", files=files)
     else:
-        await dest_channel.send("No audio was recorded.")
+        await original_send(dest_channel, "No audio was recorded.")
 
 # --- COMMANDS ---
 
 @bot.event
 async def on_ready():
     print(f'Logged in as "{bot.user.name}"')
-    print("✅ Token Swap Active. Ready to record.")
+    print("✅ Nuclear Patch Active. Messages bypass library logic.")
 
 @bot.command()
 async def help(ctx):
@@ -124,6 +150,7 @@ async def help(ctx):
         "`+stop` - Stop & Upload\n"
         "`+name <text>` - Change Name"
     )
+    # Uses direct_send automatically
     await ctx.send(msg)
 
 @bot.command()
