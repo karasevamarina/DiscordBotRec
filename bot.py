@@ -10,19 +10,19 @@ import urllib.request
 import aiohttp 
 
 # ==========================================
-# 🛡️ THE "SILENCER" PATCH (Fixes 401 Errors)
+# 🛡️ THE "SILENCER & HEADER" PATCH
 # ==========================================
 
-# 1. Patch Login (To force User Token)
+# 1. Patch Login (To force User Token & Session)
 async def patched_login(self, token):
     self.token = token.strip()
-    self._token_type = None 
+    self._token_type = "" # Empty string for User Token
     
     # Create Session manually
     if not hasattr(self, '_HTTPClient__session') or getattr(self, '_HTTPClient__session').__class__.__name__ == '_MissingSentinel':
         self._HTTPClient__session = aiohttp.ClientSession()
 
-    # Fetch Real Data
+    # Fetch Real Data via urllib (Bypasses library headers completely)
     req = urllib.request.Request("https://discord.com/api/v9/users/@me")
     req.add_header("Authorization", self.token)
     req.add_header("User-Agent", "DiscordBot (https://github.com/Rapptz/discord.py, 2.0.0)")
@@ -35,18 +35,22 @@ async def patched_login(self, token):
             raise discord.LoginFailure("Invalid User Token.")
         raise
 
-# 2. Patch Request (To silence "Unauthorized" errors for Bot-only features)
+# 2. Patch Request (Forces Raw Header & Silences 401s for Bot features)
 original_request = discord.http.HTTPClient.request
 
 async def patched_request(self, route, **kwargs):
+    # FORCE RAW HEADER (The Fix for 401 on ctx.send)
+    headers = kwargs.get('headers', {})
+    headers['Authorization'] = self.token # Overwrite with raw token
+    kwargs['headers'] = headers
+
     try:
         return await original_request(self, route, **kwargs)
     except discord.HTTPException as e:
-        # If Discord says "401 Unauthorized" for Commands or Sounds, ignore it!
-        # These features are for Real Bots only, so we just return empty data.
+        # Silence "Unauthorized" for Bot-only features (Slash commands/Sounds)
         if e.status == 401 and ("/applications/" in route.path or "soundboard" in route.path):
             return [] 
-        raise e # If it's a real error (like login fail), raise it.
+        raise e 
 
 # Apply the patches
 discord.http.HTTPClient.static_login = patched_login
@@ -64,6 +68,7 @@ bot = commands.Bot(command_prefix='+', intents=intents, help_command=None)
 
 # --- HELPER FUNCTIONS ---
 async def finished_callback(sink, dest_channel, *args):
+    # PLAIN TEXT RESPONSE
     await dest_channel.send("✅ **Recording finished.** Processing filenames...")
     
     files = []
@@ -93,21 +98,23 @@ async def finished_callback(sink, dest_channel, *args):
 
 @bot.event
 async def on_ready():
-    # UPDATED LOG FORMAT HERE
     print(f'Logged in as "{bot.user.name}" "{bot.user.display_name}"')
     print(f"Connected to {len(bot.guilds)} servers.")
-    print("✅ Bot is stable and ignoring 401 errors.")
+    print("✅ Bot is stable.")
 
 @bot.command()
 async def help(ctx):
-    embed = discord.Embed(title="🎙️ User Recorder", color=discord.Color.green())
-    embed.description = "Full Recording Capability Enabled"
-    embed.add_field(name="+join", value="Finds you and joins.", inline=False)
-    embed.add_field(name="+joinid <id>", value="Join specific ID.", inline=False)
-    embed.add_field(name="+record", value="Start recording audio.", inline=False)
-    embed.add_field(name="+stop", value="Stop and Upload.", inline=False)
-    embed.add_field(name="+name <text>", value="Change display name.", inline=False)
-    await ctx.send(embed=embed)
+    # PLAIN TEXT HELP (No Embeds allowed for Users)
+    msg = (
+        "**🎙️ User Recorder**\n"
+        "Commands:\n"
+        "`+join` - Find you and join VC\n"
+        "`+joinid <id>` - Join specific Channel ID\n"
+        "`+record` - Start recording\n"
+        "`+stop` - Stop & Upload\n"
+        "`+name <text>` - Change Name"
+    )
+    await ctx.send(msg)
 
 @bot.command()
 async def name(ctx, *, new_name: str):
@@ -115,7 +122,7 @@ async def name(ctx, *, new_name: str):
         await bot.user.edit(username=new_name)
         await ctx.send(f"✅ Username changed to: **{new_name}**")
     except Exception as e:
-        await ctx.send(f"❌ Failed (Discord Rate Limit?): {e}")
+        await ctx.send(f"❌ Failed: {e}")
 
 @bot.command()
 async def join(ctx):
