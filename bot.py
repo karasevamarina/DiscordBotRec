@@ -6,31 +6,32 @@ import pytz
 import asyncio
 import discord.http 
 import json
-import urllib.request 
+import urllib.request
+import aiohttp # REQUIRED for the fix
 
 # ==========================================
-# 🛡️ THE "GRAND UNIFYING" PATCH
+# 🛠️ THE "MANUAL SESSION" PATCH
 # ==========================================
 async def patched_login(self, token):
-    # 1. Clean the token
+    # 1. Setup Token
     self.token = token.strip()
-    self._token_type = None # removes "Bot " prefix
+    self._token_type = None 
     
-    # 2. FORCE SESSION CREATION (Fixes 'MissingSentinel' error)
-    # The library normally does this, but our patch bypassed it.
-    # We call recreate() to manually start the internet session.
-    self.recreate()
-    
-    # 3. FETCH REAL DATA (Fixes 'KeyError: avatar')
-    # We use urllib to get your real user details so the library is happy.
+    # 2. MANUALLY CREATE SESSION (The Fix)
+    # We bypass the library's recreate() and build the session directly.
+    # We assign it to the private variable '_HTTPClient__session'
+    if not hasattr(self, '_HTTPClient__session') or getattr(self, '_HTTPClient__session').__class__.__name__ == '_MissingSentinel':
+        self._HTTPClient__session = aiohttp.ClientSession()
+
+    # 3. FETCH REAL DATA (Prevents KeyError)
+    # We use urllib to fetch the user profile safely and return it to the library.
     req = urllib.request.Request("https://discord.com/api/v9/users/@me")
     req.add_header("Authorization", self.token)
     req.add_header("User-Agent", "DiscordBot (https://github.com/Rapptz/discord.py, 2.0.0)")
     
     try:
         with urllib.request.urlopen(req) as response:
-            data = json.loads(response.read().decode())
-            return data # Return REAL data
+            return json.loads(response.read().decode())
     except urllib.error.HTTPError as e:
         if e.code == 401:
             raise discord.LoginFailure("Invalid User Token.")
@@ -47,7 +48,6 @@ TOKEN = os.getenv('DISCORD_TOKEN')
 intents = discord.Intents.default()
 intents.message_content = True 
 
-# Standard Bot Setup
 bot = commands.Bot(command_prefix='+', intents=intents, help_command=None)
 
 # --- HELPER FUNCTIONS ---
@@ -82,20 +82,17 @@ async def finished_callback(sink, dest_channel, *args):
 @bot.event
 async def on_ready():
     print(f"Logged in as: {bot.user.name}")
-    print(f"ID: {bot.user.id}")
     print(f"Connected to {len(bot.guilds)} servers.")
 
 @bot.command()
 async def help(ctx):
-    embed = discord.Embed(title="🎙️ User Recorder", color=discord.Color.gold())
-    embed.description = "Recording + User Token (Fixed)"
-    
+    embed = discord.Embed(title="🎙️ User Recorder", color=discord.Color.green())
+    embed.description = "Full Recording Capability Enabled"
     embed.add_field(name="+join", value="Finds you and joins.", inline=False)
     embed.add_field(name="+joinid <id>", value="Join specific ID.", inline=False)
     embed.add_field(name="+record", value="Start recording audio.", inline=False)
     embed.add_field(name="+stop", value="Stop and Upload.", inline=False)
     embed.add_field(name="+name <text>", value="Change display name.", inline=False)
-    
     await ctx.send(embed=embed)
 
 @bot.command()
