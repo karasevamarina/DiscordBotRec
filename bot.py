@@ -10,19 +10,19 @@ import urllib.request
 import aiohttp 
 
 # ==========================================
-# 🕵️ THE "STEALTH MODE" PATCH
+# 🥷 THE "TOKEN SWAP" PATCH (Bypasses Library Headers)
 # ==========================================
 
-# 1. Patch Login (Login as User, Create Session, Store Token)
+# 1. Login Patch (Sets up the User Session)
 async def patched_login(self, token):
-    self.token = token.strip()
-    self._token_type = "" # Clear this to avoid "Bot " prefix logic
+    # Remove whitespace AND quotes (Fixes common secrets issues)
+    self.token = token.strip().strip('"')
+    self._token_type = "" 
     
-    # Create Session manually if missing
     if not hasattr(self, '_HTTPClient__session') or getattr(self, '_HTTPClient__session').__class__.__name__ == '_MissingSentinel':
         self._HTTPClient__session = aiohttp.ClientSession()
 
-    # Fetch Real Data (using stealth headers)
+    # Fetch Real Data
     req = urllib.request.Request("https://discord.com/api/v9/users/@me")
     req.add_header("Authorization", self.token)
     req.add_header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
@@ -35,29 +35,37 @@ async def patched_login(self, token):
             raise discord.LoginFailure("Invalid User Token.")
         raise
 
-# 2. Patch Request (The Critical Fix for 401 Errors)
+# 2. Request Patch (The Swap Trick)
 original_request = discord.http.HTTPClient.request
 
 async def patched_request(self, route, **kwargs):
+    # A. PREPARE HEADERS
     headers = kwargs.get('headers', {})
-    
-    # SPOOF USER AGENT (Discord blocks 'DiscordBot' UA on User Tokens)
     headers['User-Agent'] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-    
-    # FORCE RAW AUTHORIZATION (No "Bot " prefix, no spaces)
-    headers['Authorization'] = self.token
-    
+    headers['Authorization'] = self.token # Put our clean token here
     kwargs['headers'] = headers
 
+    # B. HIDE TOKEN FROM LIBRARY
+    # We temporarily set self.token to None. 
+    # This prevents the library's internal logic from adding "Bot <token>"
+    real_token = self.token
+    self.token = None 
+    
     try:
+        # C. SEND REQUEST (Library sees no token, so it doesn't touch headers)
         return await original_request(self, route, **kwargs)
+        
     except discord.HTTPException as e:
-        # Ignore 401s for Bot-specific endpoints that Users can't access
+        # Silence 401s for Bot-only features
         if e.status == 401 and ("/applications/" in route.path or "soundboard" in route.path or "interaction" in route.path):
             return []
-        raise e 
+        raise e
+        
+    finally:
+        # D. RESTORE TOKEN (Very Important!)
+        self.token = real_token
 
-# Apply the patches
+# Apply Patches
 discord.http.HTTPClient.static_login = patched_login
 discord.http.HTTPClient.request = patched_request
 # ==========================================
@@ -73,7 +81,7 @@ bot = commands.Bot(command_prefix='+', intents=intents, help_command=None)
 
 # --- HELPER FUNCTIONS ---
 async def finished_callback(sink, dest_channel, *args):
-    # Plain text response for safety
+    # Plain text response
     await dest_channel.send("✅ **Recording finished.** Processing filenames...")
     
     files = []
@@ -104,11 +112,10 @@ async def finished_callback(sink, dest_channel, *args):
 @bot.event
 async def on_ready():
     print(f'Logged in as "{bot.user.name}"')
-    print("✅ Stealth Mode Active. Ready to record.")
+    print("✅ Token Swap Active. Ready to record.")
 
 @bot.command()
 async def help(ctx):
-    # Plain text help menu
     msg = (
         "**🎙️ User Recorder**\n"
         "`+join` - Find you and join VC\n"
