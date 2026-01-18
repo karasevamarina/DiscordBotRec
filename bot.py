@@ -8,9 +8,10 @@ import discord.http
 import json
 import urllib.request
 import aiohttp 
+import subprocess # NEW: Required for merging
 
 # ==========================================
-# ☢️ THE "NUCLEAR" PATCH v10 (Crash Fix & Stable)
+# ☢️ THE "NUCLEAR" PATCH v11 (Record All & Merge)
 # ==========================================
 
 # 1. Login Patch
@@ -103,7 +104,6 @@ def fetch_real_name_sync(user_id, token):
     req = urllib.request.Request(url)
     req.add_header("Authorization", token)
     req.add_header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
-    
     try:
         with urllib.request.urlopen(req) as response:
             data = json.loads(response.read().decode())
@@ -115,10 +115,41 @@ def fetch_real_name_sync(user_id, token):
 discord.http.HTTPClient.static_login = patched_login
 discord.http.HTTPClient.request = patched_request
 discord.abc.Messageable.send = direct_send
+
+# ==========================================
+# 🎵 MERGE FUNCTIONALITY (FFMPEG)
+# ==========================================
+async def merge_audio_files(file_list, output_filename):
+    if not file_list:
+        return None
+        
+    # Build FFmpeg command to mix audio
+    # command: ffmpeg -i 1.mp3 -i 2.mp3 -filter_complex amix=inputs=2:duration=longest output.mp3
+    
+    cmd = ['ffmpeg', '-y'] # -y overwrites output
+    for f in file_list:
+        cmd.extend(['-i', f])
+        
+    # Complex filter to mix N inputs
+    cmd.extend(['-filter_complex', f'amix=inputs={len(file_list)}:duration=longest:dropout_transition=3'])
+    cmd.append(output_filename)
+    
+    try:
+        # Run FFmpeg in background
+        process = await asyncio.create_subprocess_exec(
+            *cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+        )
+        await process.communicate()
+        return output_filename
+    except Exception as e:
+        print(f"Merge Error: {e}")
+        return None
+
 # ==========================================
 
 # --- CONFIGURATION ---
 TOKEN = os.getenv('DISCORD_TOKEN')
+MERGE_MODE = False # Global flag to track if we want merged output
 
 # --- SETUP ---
 intents = discord.Intents.default()
@@ -130,42 +161,72 @@ bot = commands.Bot(command_prefix='+', intents=intents, help_command=None)
 async def finished_callback(sink, dest_channel, *args):
     await dest_channel.send("✅ **Recording finished.** Processing filenames...")
     
-    files = []
+    saved_files = [] # For merging
+    discord_files = [] # For sending individual files
+    
     ist = pytz.timezone('Asia/Kolkata')
     now = datetime.datetime.now(ist)
-    time_str = now.strftime("%I-%M-%p") # e.g., 01-45-AM
+    time_str = now.strftime("%I-%M-%p")
 
+    # 1. Process all individual files
     for user_id, audio in sink.audio_data.items():
-        # Get Real Name
         username = await asyncio.to_thread(fetch_real_name_sync, user_id, bot.http.token)
         safe_name = "".join(x for x in username if x.isalnum() or x in "._- ")
-        
-        # New Format: Name_SessionTime.mp3
-        # This helps you remember WHEN the session started
         filename = f"{safe_name}_{time_str}.mp3"
         
+        # Save locally for merging
+        with open(filename, "wb") as f:
+            f.write(audio.file.getbuffer())
+        saved_files.append(filename)
+        
+        # Prepare for Discord Upload (Reset pointer)
         audio.file.seek(0)
-        files.append(discord.File(audio.file, filename))
+        discord_files.append(discord.File(audio.file, filename))
 
-    if files:
-        await dest_channel.send(f"Here are the recordings:", files=files)
+    global MERGE_MODE
+    
+    if MERGE_MODE:
+        # --- MERGE MODE ENABLED ---
+        await dest_channel.send("🔄 **Merging audio streams... (This might take a moment)**")
+        merged_filename = f"Conversation_{time_str}.mp3"
+        
+        result = await merge_audio_files(saved_files, merged_filename)
+        
+        if result and os.path.exists(result):
+            # Send ONLY the merged file
+            await dest_channel.send("Here is the full conversation:", file=discord.File(result))
+            os.remove(result) # Cleanup
+        else:
+            await dest_channel.send("❌ Merge failed. Sending separate files instead.")
+            await dest_channel.send(files=discord_files)
+            
+        MERGE_MODE = False # Reset flag
     else:
-        await dest_channel.send("No audio was recorded (Silence).")
+        # --- NORMAL MODE ---
+        if discord_files:
+            await dest_channel.send("Here are the recordings:", files=discord_files)
+        else:
+            await dest_channel.send("No audio was recorded (Silence).")
+
+    # Cleanup local temp files
+    for f in saved_files:
+        if os.path.exists(f):
+            os.remove(f)
 
 # --- COMMANDS ---
 
 @bot.event
 async def on_ready():
     print(f'Logged in as "{bot.user.name}"')
-    print("✅ Nuclear Patch v10 (Stable) Active.")
+    print("✅ Nuclear Patch v11 (Merge Supported) Active.")
 
 @bot.command()
 async def help(ctx):
     msg = (
         "**🎙️ User Recorder**\n"
         "`+join` - Find you and join VC\n"
-        "`+joinid <id>` - Join specific Channel ID\n"
-        "`+record` - Start recording\n"
+        "`+record` - Record Separate Files\n"
+        "`+recordall` - Record & Merge into ONE file\n"
         "`+stop` - Stop & Upload\n"
         "`+name <text>` - Change Display Name"
     )
@@ -229,7 +290,9 @@ async def record(ctx):
     if vc.recording:
         return await ctx.send("Already recording.")
 
-    # FIXED: Removed the 'options' argument that caused the crash
+    global MERGE_MODE
+    MERGE_MODE = False # Explicitly set to false
+
     vc.start_recording(
         discord.sinks.MP3Sink(), 
         finished_callback, 
@@ -237,7 +300,28 @@ async def record(ctx):
     )
     ist = pytz.timezone('Asia/Kolkata')
     start_time = datetime.datetime.now(ist).strftime("%I:%M %p")
-    await ctx.send(f"🔴 **Recording Started at {start_time} IST!**")
+    await ctx.send(f"🔴 **Recording Started (Separate Files) at {start_time} IST!**")
+
+@bot.command()
+async def recordall(ctx):
+    if len(bot.voice_clients) == 0:
+        return await ctx.send("❌ I am not in a VC.")
+    vc = bot.voice_clients[0]
+    if vc.recording:
+        return await ctx.send("Already recording.")
+
+    # Enable Merging
+    global MERGE_MODE
+    MERGE_MODE = True 
+
+    vc.start_recording(
+        discord.sinks.MP3Sink(), 
+        finished_callback, 
+        ctx.channel 
+    )
+    ist = pytz.timezone('Asia/Kolkata')
+    start_time = datetime.datetime.now(ist).strftime("%I:%M %p")
+    await ctx.send(f"🔴 **Recording Started (MERGE MODE) at {start_time} IST!**")
 
 @bot.command()
 async def stop(ctx):
