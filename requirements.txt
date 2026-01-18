@@ -1,3 +1,3 @@
-discord.py-self
+py-cord[voice]
 pynacl
 pytz
