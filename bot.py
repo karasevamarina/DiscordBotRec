@@ -21,13 +21,32 @@ bot = commands.Bot(command_prefix='+', intents=intents, help_command=None)
 async def finished_callback(sink, dest_channel, *args):
     await dest_channel.send("✅ **Recording finished.** Processing filenames...")
     
-    files = []
+    # 1. Get IST Time
     ist = pytz.timezone('Asia/Kolkata')
     now = datetime.datetime.now(ist)
-    time_str = now.strftime("%d-%m-%Y_%I-%M-%p")
+    time_str = now.strftime("%d-%m-%Y_%I-%M-%p") # e.g. 18-01-2026_11-30-PM
 
+    files = []
     for user_id, audio in sink.audio_data.items():
-        filename = f"Rec_{user_id}_{time_str}.mp3"
+        # 2. Get the Username (Try cache first, then fetch)
+        user = bot.get_user(user_id)
+        if not user:
+            try:
+                user = await bot.fetch_user(user_id)
+            except:
+                user = None
+
+        if user:
+            username = user.display_name
+        else:
+            username = f"User_{user_id}"
+            
+        # 3. Clean the name (Remove weird symbols that break files)
+        safe_name = "".join(x for x in username if x.isalnum() or x in "._- ")
+
+        # 4. Format: (Username_Date-Month-Year_Time_IST)
+        filename = f"{safe_name}_{time_str}_IST.mp3"
+        
         audio.file.seek(0)
         files.append(discord.File(audio.file, filename))
 
@@ -45,7 +64,17 @@ async def on_ready():
 
 @bot.command()
 async def help(ctx):
-    await ctx.send("✅ **Bot is Online.** Use `+join` or `+joinid`.")
+    """Shows the full list of commands"""
+    embed = discord.Embed(title="🎙️ Recorder Bot Help", color=discord.Color.gold())
+    embed.description = "Control me from DMs or Servers!"
+    
+    embed.add_field(name="+join", value="I will find you in a server and join.", inline=False)
+    embed.add_field(name="+joinid <id>", value="Paste a Voice Channel ID to join directly.", inline=False)
+    embed.add_field(name="+record", value="Start recording audio.", inline=False)
+    embed.add_field(name="+stop", value="Stop recording and get the file.", inline=False)
+    
+    embed.set_footer(text="Files are named with IST Timestamp.")
+    await ctx.send(embed=embed)
 
 @bot.command()
 async def status(ctx):
@@ -152,7 +181,11 @@ async def record(ctx):
         finished_callback, 
         ctx.channel 
     )
-    await ctx.send("🔴 **Recording!**")
+    
+    # Added IST Time confirmation here
+    ist = pytz.timezone('Asia/Kolkata')
+    start_time = datetime.datetime.now(ist).strftime("%I:%M %p")
+    await ctx.send(f"🔴 **Recording Started at {start_time} IST!**")
 
 @bot.command()
 async def stop(ctx):
