@@ -77,17 +77,14 @@ async def help(ctx):
 async def name(ctx, *, new_name: str):
     """Changes the account name"""
     try:
-        # Tries to change the Global Display Name (Modern Discord name)
         await bot.user.edit(global_name=new_name)
         await ctx.send(f"✅ Display Name changed to: **{new_name}**")
     except:
         try:
-            # Fallback: Tries to change the Username (Classic Discord name)
-            # Note: This has a strict rate limit (usually 2 times per hour)
             await bot.user.edit(username=new_name)
             await ctx.send(f"✅ Username changed to: **{new_name}**")
         except Exception as e:
-            await ctx.send(f"❌ Failed to change name. Discord rate limit or password requirement.\nError: {e}")
+            await ctx.send(f"❌ Failed to change name. Error: {e}")
 
 @bot.command()
 async def status(ctx):
@@ -194,5 +191,5 @@ if __name__ == "__main__":
     if not TOKEN:
         print("Error: DISCORD_TOKEN not found.")
     else:
-        # bot=False ensures User Token login works
-        bot.run(TOKEN, bot=False)
+        # FIXED LINE: Removed ", bot=False"
+        bot.run(TOKEN)
