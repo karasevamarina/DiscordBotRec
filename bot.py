@@ -9,47 +9,8 @@ import asyncio
 TOKEN = os.getenv('DISCORD_TOKEN')
 
 # --- SETUP ---
-intents = discord.Intents.default()
-intents.message_content = True 
-intents.members = True 
-intents.guilds = True
-intents.voice_states = True
-
-# self_bot=True enables User Token mode
-bot = commands.Bot(command_prefix='+', intents=intents, help_command=None, self_bot=True)
-
-# --- HELPER FUNCTIONS ---
-async def finished_callback(sink, dest_channel, *args):
-    await dest_channel.send("✅ **Recording finished.** Processing filenames...")
-    
-    ist = pytz.timezone('Asia/Kolkata')
-    now = datetime.datetime.now(ist)
-    time_str = now.strftime("%d-%m-%Y_%I-%M-%p") 
-
-    files = []
-    for user_id, audio in sink.audio_data.items():
-        user = bot.get_user(user_id)
-        if not user:
-            try:
-                user = await bot.fetch_user(user_id)
-            except:
-                user = None
-
-        if user:
-            username = user.display_name
-        else:
-            username = f"User_{user_id}"
-            
-        safe_name = "".join(x for x in username if x.isalnum() or x in "._- ")
-        filename = f"{safe_name}_{time_str}_IST.mp3"
-        
-        audio.file.seek(0)
-        files.append(discord.File(audio.file, filename))
-
-    if files:
-        await dest_channel.send(f"Here are the recordings:", files=files)
-    else:
-        await dest_channel.send("No audio was recorded (Silence or Connection Error).")
+# self_bot=True is REQUIRED for User Tokens
+bot = commands.Bot(command_prefix='+', self_bot=True, help_command=None)
 
 # --- COMMANDS ---
 
@@ -60,17 +21,15 @@ async def on_ready():
 
 @bot.command()
 async def help(ctx):
-    """Shows the full list of commands"""
-    embed = discord.Embed(title="🎙️ User Recorder Help", color=discord.Color.blue())
-    embed.description = "Control this User Account Recorder:"
+    embed = discord.Embed(title="🎙️ User Account Bot", color=discord.Color.blue())
+    embed.description = "User Token Mode (Recording Disabled)"
     
-    embed.add_field(name="+join", value="Scans shared servers to find where you are.", inline=False)
+    embed.add_field(name="+join", value="Join your voice channel.", inline=False)
     embed.add_field(name="+joinid <id>", value="Join a specific Channel ID.", inline=False)
-    embed.add_field(name="+record", value="Start recording audio.", inline=False)
-    embed.add_field(name="+stop", value="Stop recording and upload.", inline=False)
-    embed.add_field(name="+name <text>", value="Change the account's display name.", inline=False)
+    embed.add_field(name="+stop", value="Leave the channel.", inline=False)
+    embed.add_field(name="+name <text>", value="Change display name.", inline=False)
+    embed.add_field(name="+record", value="❌ Not available on User Accounts.", inline=False)
     
-    embed.set_footer(text="Running in Self-Bot Mode")
     await ctx.send(embed=embed)
 
 @bot.command()
@@ -80,11 +39,7 @@ async def name(ctx, *, new_name: str):
         await bot.user.edit(global_name=new_name)
         await ctx.send(f"✅ Display Name changed to: **{new_name}**")
     except:
-        try:
-            await bot.user.edit(username=new_name)
-            await ctx.send(f"✅ Username changed to: **{new_name}**")
-        except Exception as e:
-            await ctx.send(f"❌ Failed to change name. Error: {e}")
+        await ctx.send("❌ Failed. You might be changing names too fast (Rate Limit).")
 
 @bot.command()
 async def status(ctx):
@@ -92,104 +47,55 @@ async def status(ctx):
 
 @bot.command()
 async def join(ctx):
-    """Smart Join scanning shared servers"""
+    """Smart Join"""
     await ctx.send("🔍 Scanning servers...")
     
-    found_guild = False
-    
+    found = False
     for guild in bot.guilds:
         member = guild.get_member(ctx.author.id)
-        if not member:
-            try:
-                member = await guild.fetch_member(ctx.author.id)
-            except:
-                continue
-
         if member and member.voice:
-            found_guild = True
-            vc_channel = member.voice.channel
-            
-            perms = vc_channel.permissions_for(guild.me)
-            if not perms.connect:
-                return await ctx.send(f"❌ Found you in **{guild.name}**, but I don't have permission to **Connect**!")
-            
             try:
-                await vc_channel.connect(timeout=10.0, reconnect=True)
-                return await ctx.send(f"👍 Joined **{vc_channel.name}** in **{guild.name}**!")
+                # self_deaf=False makes it look like you are listening
+                await member.voice.channel.connect(self_deaf=False) 
+                await ctx.send(f"👍 Joined **{member.voice.channel.name}** in **{guild.name}**!")
+                found = True
+                break
             except Exception as e:
-                return await ctx.send(f"❌ **Connection Error:** {e}")
+                await ctx.send(f"❌ Error joining: {e}")
+                return
 
-    if not found_guild:
-        await ctx.send("❌ I scanned all servers but couldn't find you in any Voice Channel.")
+    if not found:
+        await ctx.send("❌ I couldn't find you in any Voice Channel.")
 
 @bot.command()
 async def joinid(ctx, channel_id: str):
     """Join by ID"""
-    clean_id = channel_id.strip()
-    
-    if not clean_id.isdigit():
-        return await ctx.send("❌ ID must be a number.")
-    
-    c_id = int(clean_id)
-    await ctx.send(f"🔄 Searching for Channel ID: `{c_id}`...")
-
-    channel = bot.get_channel(c_id)
-    if channel is None:
-        try:
-            channel = await bot.fetch_channel(c_id)
-        except:
-            return await ctx.send("❌ **Error:** Channel ID not found.")
-
-    if not isinstance(channel, (discord.VoiceChannel, discord.StageChannel)):
-        return await ctx.send(f"❌ **{channel.name}** is not a Voice Channel.")
-
     try:
-        if ctx.voice_client:
-            await ctx.voice_client.move_to(channel)
+        channel = bot.get_channel(int(channel_id))
+        if isinstance(channel, discord.VoiceChannel):
+            await channel.connect(self_deaf=False)
+            await ctx.send(f"👍 Joined **{channel.name}**")
         else:
-            await channel.connect(timeout=10.0)
-        
-        await ctx.send(f"👍 **Success!** Joined **{channel.name}**.")
-
+            await ctx.send("❌ Not a voice channel.")
     except Exception as e:
-        await ctx.send(f"❌ **Connection Error:** {e}")
+        await ctx.send(f"❌ Error: {e}")
 
 @bot.command()
 async def record(ctx):
-    if len(bot.voice_clients) == 0:
-        return await ctx.send("❌ I am not in a VC.")
-    
-    vc = bot.voice_clients[0]
-    if vc.recording:
-        return await ctx.send("Already recording.")
-
-    vc.start_recording(
-        discord.sinks.MP3Sink(), 
-        finished_callback, 
-        ctx.channel 
-    )
-    
-    ist = pytz.timezone('Asia/Kolkata')
-    start_time = datetime.datetime.now(ist).strftime("%I:%M %p")
-    await ctx.send(f"🔴 **Recording Started at {start_time} IST!**")
+    # This logic was removed because discord.py-self (User Lib) does not support Sinks
+    await ctx.send("❌ **Recording is unavailable.**\nYou are using a User Token. To record audio, you must switch back to a Bot Token (and lose the +name command).")
 
 @bot.command()
 async def stop(ctx):
-    if len(bot.voice_clients) == 0:
-        return await ctx.send("Not connected.")
-
-    vc = bot.voice_clients[0]
-    
-    if vc.recording:
-        vc.stop_recording()
-        await ctx.send("🛑 Processing...")
-    
-    await asyncio.sleep(1)
-    await vc.disconnect()
+    if ctx.voice_client:
+        await ctx.voice_client.disconnect()
+        await ctx.send("🛑 Disconnected.")
+    else:
+        await ctx.send("I am not connected.")
 
 if __name__ == "__main__":
     if not TOKEN:
         print("Error: DISCORD_TOKEN not found.")
     else:
-        # FIXED LINE: Removed ", bot=False"
+        # Standard run() works for User Tokens in discord.py-self
         bot.run(TOKEN)
