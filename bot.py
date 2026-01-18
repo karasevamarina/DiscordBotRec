@@ -10,11 +10,12 @@ import urllib.request
 import aiohttp 
 
 # ==========================================
-# ☢️ THE "NUCLEAR" PATCH (Direct API Sending)
+# ☢️ THE "NUCLEAR" PATCH (Direct API Sending v2)
 # ==========================================
 
 # 1. Login Patch (Standard User Token Login)
 async def patched_login(self, token):
+    # Strip quotes/spaces to prevent token errors
     self.token = token.strip().strip('"')
     self._token_type = ""
     
@@ -35,10 +36,17 @@ async def patched_login(self, token):
             raise discord.LoginFailure("Invalid User Token.")
         raise
 
-# 2. THE NEW SEND FUNCTION (Bypasses Library Completely)
+# 2. THE NEW SEND FUNCTION (Fixed ID Logic)
 async def direct_send(self, content=None, **kwargs):
-    # This replaces ctx.send()
-    channel_id = self.id
+    # FIX: Correctly find the Channel ID
+    if hasattr(self, 'channel'):
+        channel_id = self.channel.id # If 'self' is Context
+    elif hasattr(self, 'id'):
+        channel_id = self.id # If 'self' is a Channel
+    else:
+        print("❌ Error: Could not find Channel ID for sending.")
+        return
+
     url = f"https://discord.com/api/v9/channels/{channel_id}/messages"
     
     # Build payload
@@ -46,7 +54,6 @@ async def direct_send(self, content=None, **kwargs):
     if content:
         payload['content'] = str(content)
         
-    # Get the global bot instance to access the token/session
     global bot
     headers = {
         "Authorization": bot.http.token,
@@ -54,21 +61,19 @@ async def direct_send(self, content=None, **kwargs):
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
     }
 
-    # Files handling (Multipart) is complex, so for simplicity in this patch
-    # we handle TEXT only via JSON, and FILES if provided via standard library logic
-    # BUT, to fix your error, we prioritize the text-only JSON send first.
-    
     session = bot.http._HTTPClient__session
     
+    # If sending files, fallback to original logic (handled by patched_request)
     if kwargs.get('files'):
-        # If sending files (like the recording), we let the library try its best
-        # but we patch the headers in 'patched_request' below as a backup.
         return await original_send(self, content, **kwargs)
         
     async with session.post(url, json=payload, headers=headers) as resp:
         if resp.status == 401:
             print("❌ Critical: 401 Unauthorized even on direct send.")
-        return await resp.json()
+        try:
+            return await resp.json()
+        except:
+            return None
 
 # 3. Patch Request (Backup for Files/Voice)
 original_request = discord.http.HTTPClient.request
@@ -89,9 +94,8 @@ async def patched_request(self, route, **kwargs):
 discord.http.HTTPClient.static_login = patched_login
 discord.http.HTTPClient.request = patched_request
 
-# Save original send to use for files later
+# Save/Overwrite Send
 original_send = discord.abc.Messageable.send
-# Overwrite send with our direct sender
 discord.abc.Messageable.send = direct_send
 # ==========================================
 
@@ -106,8 +110,7 @@ bot = commands.Bot(command_prefix='+', intents=intents, help_command=None)
 
 # --- HELPER FUNCTIONS ---
 async def finished_callback(sink, dest_channel, *args):
-    # We use the ORIGINAL send for files because it handles multipart upload complex logic
-    # The patched_request header fix above should handle the auth for this part.
+    # Use ORIGINAL send for files (Multipart logic is hard to replicate)
     await original_send(dest_channel, "✅ **Recording finished.** Processing filenames...")
     
     files = []
@@ -138,7 +141,7 @@ async def finished_callback(sink, dest_channel, *args):
 @bot.event
 async def on_ready():
     print(f'Logged in as "{bot.user.name}"')
-    print("✅ Nuclear Patch Active. Messages bypass library logic.")
+    print("✅ Nuclear Patch v2 Active. Ready to record.")
 
 @bot.command()
 async def help(ctx):
@@ -150,7 +153,6 @@ async def help(ctx):
         "`+stop` - Stop & Upload\n"
         "`+name <text>` - Change Name"
     )
-    # Uses direct_send automatically
     await ctx.send(msg)
 
 @bot.command()
