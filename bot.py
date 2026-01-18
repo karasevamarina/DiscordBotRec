@@ -3,12 +3,10 @@ from discord.ext import commands
 import os
 import datetime
 import pytz 
+import asyncio
 
 # --- CONFIGURATION ---
 TOKEN = os.getenv('DISCORD_TOKEN')
-
-# ⚠️ PASTE YOUR USER ID HERE
-OWNER_ID = 123456789012345678 
 
 # --- SETUP ---
 intents = discord.Intents.default()
@@ -16,11 +14,6 @@ intents.message_content = True
 intents.members = True # REQUIRED to find you in servers
 
 bot = commands.Bot(command_prefix='+', intents=intents, help_command=None)
-
-# --- CHECKS ---
-def is_owner_check(ctx):
-    # SIMPLE CHECK: Is it you? If yes, allow it (even in DMs).
-    return ctx.author.id == OWNER_ID
 
 # --- HELPER FUNCTIONS ---
 async def finished_callback(sink, dest_channel, *args):
@@ -45,11 +38,15 @@ async def finished_callback(sink, dest_channel, *args):
 
 # --- COMMANDS ---
 
+@bot.event
+async def on_ready():
+    print(f"Logged in as {bot.user}")
+    print("Bot is ready and unlocked!")
+
 @bot.command()
-@commands.check(is_owner_check)
 async def help(ctx):
-    embed = discord.Embed(title="🎙️ DM Recorder Bot", color=discord.Color.green())
-    embed.description = "Control me from DMs!"
+    embed = discord.Embed(title="🎙️ Unlocked Recorder Bot", color=discord.Color.green())
+    embed.description = "Control me from DMs or Servers!"
     embed.add_field(name="+join", value="I'll search for you in servers and join.", inline=False)
     embed.add_field(name="+joinid <id>", value="Force join a Channel ID.", inline=False)
     embed.add_field(name="+record", value="Start recording.", inline=False)
@@ -57,25 +54,27 @@ async def help(ctx):
     await ctx.send(embed=embed)
 
 @bot.command()
-@commands.check(is_owner_check)
 async def join(ctx):
     """Smart Join: Finds you in any server"""
     await ctx.send("🔍 Scanning servers to find you...")
     
     # Loop through every server the bot is in
+    found = False
     for guild in bot.guilds:
-        # Check if you (the owner) are in this guild
+        # Check if the user who sent the command is in this guild
         member = guild.get_member(ctx.author.id)
         
         # If found AND you are in a voice channel
         if member and member.voice:
             await member.voice.channel.connect()
-            return await ctx.send(f"👍 Found you in **{guild.name}**! Joined **{member.voice.channel.name}**.")
+            await ctx.send(f"👍 Found you in **{guild.name}**! Joined **{member.voice.channel.name}**.")
+            found = True
+            break
 
-    await ctx.send("❌ I couldn't find you in any Voice Channel. Make sure you are connected first!")
+    if not found:
+        await ctx.send("❌ I couldn't find you in any Voice Channel. Make sure you are connected first!")
 
 @bot.command()
-@commands.check(is_owner_check)
 async def joinid(ctx, channel_id: str):
     """Force join a specific channel ID"""
     try:
@@ -90,7 +89,6 @@ async def joinid(ctx, channel_id: str):
         await ctx.send("❌ Invalid ID.")
 
 @bot.command()
-@commands.check(is_owner_check)
 async def record(ctx):
     # Find the active voice connection
     if len(bot.voice_clients) == 0:
@@ -101,7 +99,7 @@ async def record(ctx):
     if vc.recording:
         return await ctx.send("Already recording!")
 
-    # Start recording and tell it to send files to YOUR DM (ctx.channel)
+    # Start recording and tell it to send files to wherever you typed the command (DM)
     vc.start_recording(
         discord.sinks.MP3Sink(), 
         finished_callback, 
@@ -113,7 +111,6 @@ async def record(ctx):
     await ctx.send(f"🔴 **Recording Started at {start_time} IST!**")
 
 @bot.command()
-@commands.check(is_owner_check)
 async def stop(ctx):
     if len(bot.voice_clients) == 0:
         return await ctx.send("I am not connected.")
@@ -122,19 +119,15 @@ async def stop(ctx):
 
     if vc.recording:
         vc.stop_recording()
-        await ctx.send("🛑 **Stopping...** (Uploading to DM...)")
+        await ctx.send("🛑 **Stopping...** (Uploading...)")
         
     # Wait 1 second before leaving so the file upload doesn't get cut off
-    import asyncio
     await asyncio.sleep(1)
     await vc.disconnect()
 
 @bot.event
 async def on_command_error(ctx, error):
-    # If a command fails, print it so we can see why in the logs
     print(f"Error: {error}")
-    if isinstance(error, commands.CheckFailure):
-        pass
 
 if __name__ == "__main__":
     if not TOKEN:
