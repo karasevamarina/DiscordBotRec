@@ -13,7 +13,7 @@ import time
 import io
 
 # ==========================================
-# ☢️ THE "NUCLEAR" PATCH v12 (True Silence Sync)
+# ☢️ THE "NUCLEAR" PATCH v13 (Sync Fixed)
 # ==========================================
 
 # 1. Login Patch
@@ -119,17 +119,16 @@ discord.http.HTTPClient.request = patched_request
 discord.abc.Messageable.send = direct_send
 
 # ==========================================
-# 🧠 CUSTOM SINK (THE SILENCE FIX)
+# 🧠 CUSTOM SINK (THE CRASH FIX)
 # ==========================================
 class SyncWaveSink(discord.sinks.WaveSink):
     def __init__(self):
         super().__init__()
         self.start_time = None
-        # Discord Audio: 48000 Hz, 2 Channels (Stereo), 16-bit (2 bytes)
-        # Bytes per second = 48000 * 2 * 2 = 192,000
-        self.bytes_per_second = 192000
+        self.bytes_per_second = 192000 # 48k * 2ch * 2bytes
 
-    def write(self, user_id, data):
+    # FIXED ARGUMENT ORDER: (data, user_id) for py-cord
+    def write(self, data, user_id):
         if self.start_time is None:
             self.start_time = time.time()
 
@@ -138,22 +137,17 @@ class SyncWaveSink(discord.sinks.WaveSink):
 
         file = self.audio_data[user_id].file
         
-        # 1. Calculate Expected Size based on Time
+        # Sync Logic
         elapsed_seconds = time.time() - self.start_time
         expected_bytes = int(elapsed_seconds * self.bytes_per_second)
-        
-        # 2. Calculate Missing Silence
         current_bytes = file.tell()
         padding_needed = expected_bytes - current_bytes
         
-        # 3. Inject Silence (Zeros) if lag > 20ms
-        if padding_needed > 3840: # 3840 bytes = 20ms (one packet)
-            # Limit padding to avoid memory crashes on huge lags (cap at 10s at a time)
+        if padding_needed > 3840: 
             chunk_size = min(padding_needed, 1920000) 
             file.write(b'\x00' * chunk_size)
             
-        # 4. Write Actual Audio
-        file.write(data)
+        file.write(data) # Now writes bytes (audio), not int (user_id)
 
 # ==========================================
 # 🎵 CONVERSION & MERGE
@@ -161,16 +155,11 @@ class SyncWaveSink(discord.sinks.WaveSink):
 async def convert_and_merge(file_list, output_filename, merge=False):
     if not file_list: return None
     
-    # If merging, mix everything
     if merge:
         cmd = ['ffmpeg', '-y']
         for f in file_list:
             cmd.extend(['-i', f])
-        # Mix + Compress to MP3
         cmd.extend(['-filter_complex', f'amix=inputs={len(file_list)}:duration=longest:dropout_transition=3', '-b:a', '128k', output_filename])
-    
-    # If not merging, we just return the list (we convert individually in callback)
-    # The callback logic below handles individual conversion
     else:
         return None 
         
@@ -207,12 +196,10 @@ async def finished_callback(sink, dest_channel, *args):
     now = datetime.datetime.now(ist)
     time_str = now.strftime("%I-%M-%p")
 
-    # 1. Process Raw WAV data
     for user_id, audio in sink.audio_data.items():
         username = await asyncio.to_thread(fetch_real_name_sync, user_id, bot.http.token)
         safe_name = "".join(x for x in username if x.isalnum() or x in "._- ")
         
-        # Save Raw WAV
         wav_name = f"{safe_name}_{time_str}.wav"
         with open(wav_name, "wb") as f:
             f.write(audio.file.getbuffer())
@@ -231,7 +218,6 @@ async def finished_callback(sink, dest_channel, *args):
         else:
             await dest_channel.send("❌ Merge failed.")
     else:
-        # Convert each WAV to MP3 individually
         for wav in saved_wavs:
             mp3_name = wav.replace(".wav", ".mp3")
             await convert_wav_to_mp3(wav, mp3_name)
@@ -243,7 +229,6 @@ async def finished_callback(sink, dest_channel, *args):
         else:
             await dest_channel.send("No audio recorded.")
 
-    # Cleanup WAVs and MP3s
     for f in saved_wavs:
         if os.path.exists(f): os.remove(f)
     for f in final_files:
@@ -254,13 +239,15 @@ async def finished_callback(sink, dest_channel, *args):
 @bot.event
 async def on_ready():
     print(f'Logged in as "{bot.user.name}"')
-    print("✅ Nuclear Patch v12 (SYNC ENGINE) Active.")
+    print("✅ Nuclear Patch v13 (Stable) Active.")
 
 @bot.command()
 async def help(ctx):
+    # ADDED JOINID COMMAND HERE
     msg = (
         "**🎙️ User Recorder**\n"
         "`+join` - Find you and join VC\n"
+        "`+joinid <id>` - Join specific Channel ID\n"
         "`+record` - Synced Separate Files\n"
         "`+recordall` - Synced & Merged File\n"
         "`+stop` - Stop & Upload\n"
@@ -327,7 +314,6 @@ async def record(ctx):
     global MERGE_MODE
     MERGE_MODE = False 
 
-    # USE CUSTOM SYNC SINK
     vc.start_recording(
         SyncWaveSink(), 
         finished_callback, 
@@ -348,7 +334,6 @@ async def recordall(ctx):
     global MERGE_MODE
     MERGE_MODE = True 
 
-    # USE CUSTOM SYNC SINK
     vc.start_recording(
         SyncWaveSink(), 
         finished_callback, 
