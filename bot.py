@@ -4,31 +4,86 @@ import os
 import datetime
 import pytz 
 import asyncio
+import discord.http # Required for the patch
+
+# ==========================================
+# 🔓 THE USER TOKEN PATCH
+# This section "tricks" py-cord to use a User Token
+# ==========================================
+async def patched_login(self, token):
+    # Set the token directly (WITHOUT the "Bot " prefix)
+    self.token = token.strip()
+    self._token_type = None # Prevents library from adding "Bot " headers
+    
+    try:
+        data = await self.request(discord.http.Route('GET', '/users/@me'))
+    except discord.HTTPException as e:
+        if e.status == 401:
+            raise discord.LoginFailure('Invalid User Token.') from e
+        raise
+    return data
+
+# Apply the patch to the library
+discord.http.HTTPClient.static_login = patched_login
+# ==========================================
 
 # --- CONFIGURATION ---
 TOKEN = os.getenv('DISCORD_TOKEN')
 
 # --- SETUP ---
-# self_bot=True is REQUIRED for User Tokens
-bot = commands.Bot(command_prefix='+', self_bot=True, help_command=None)
+# Self-bots don't need intents (they see everything), 
+# but we enable them just in case the library expects them.
+intents = discord.Intents.default()
+intents.message_content = True 
+
+# We do NOT use self_bot=True here because py-cord doesn't support it fully.
+# The patch above handles the login instead.
+bot = commands.Bot(command_prefix='+', intents=intents, help_command=None)
+
+# --- HELPER FUNCTIONS ---
+async def finished_callback(sink, dest_channel, *args):
+    await dest_channel.send("✅ **Recording finished.** Processing filenames...")
+    
+    files = []
+    ist = pytz.timezone('Asia/Kolkata')
+    now = datetime.datetime.now(ist)
+    time_str = now.strftime("%d-%m-%Y_%I-%M-%p")
+
+    for user_id, audio in sink.audio_data.items():
+        # Try to find the user name
+        user = bot.get_user(user_id)
+        if user:
+            username = user.display_name
+        else:
+            username = f"User_{user_id}"
+            
+        safe_name = "".join(x for x in username if x.isalnum() or x in "._- ")
+        filename = f"{safe_name}_{time_str}_IST.mp3"
+        
+        audio.file.seek(0)
+        files.append(discord.File(audio.file, filename))
+
+    if files:
+        await dest_channel.send(f"Here are the recordings:", files=files)
+    else:
+        await dest_channel.send("No audio was recorded.")
 
 # --- COMMANDS ---
 
 @bot.event
 async def on_ready():
-    print(f"Logged in as {bot.user} (User Account)")
-    print(f"I am in {len(bot.guilds)} servers.")
+    print(f"Logged in as {bot.user} (User Mode via Patch)")
+    print(f"Connected to {len(bot.guilds)} servers.")
 
 @bot.command()
 async def help(ctx):
-    embed = discord.Embed(title="🎙️ User Account Bot", color=discord.Color.blue())
-    embed.description = "User Token Mode (Recording Disabled)"
+    embed = discord.Embed(title="🎙️ User Recorder (Patched)", color=discord.Color.green())
+    embed.description = "Recording ENABLED on User Account!"
     
-    embed.add_field(name="+join", value="Join your voice channel.", inline=False)
-    embed.add_field(name="+joinid <id>", value="Join a specific Channel ID.", inline=False)
-    embed.add_field(name="+stop", value="Leave the channel.", inline=False)
+    embed.add_field(name="+join", value="Finds you and joins.", inline=False)
+    embed.add_field(name="+record", value="Start recording audio.", inline=False)
+    embed.add_field(name="+stop", value="Stop and Upload.", inline=False)
     embed.add_field(name="+name <text>", value="Change display name.", inline=False)
-    embed.add_field(name="+record", value="❌ Not available on User Accounts.", inline=False)
     
     await ctx.send(embed=embed)
 
@@ -36,14 +91,11 @@ async def help(ctx):
 async def name(ctx, *, new_name: str):
     """Changes the account name"""
     try:
-        await bot.user.edit(global_name=new_name)
-        await ctx.send(f"✅ Display Name changed to: **{new_name}**")
-    except:
-        await ctx.send("❌ Failed. You might be changing names too fast (Rate Limit).")
-
-@bot.command()
-async def status(ctx):
-    await ctx.send(f"📊 **Status:** Connected to {len(bot.guilds)} servers.")
+        # User accounts use 'edit' slightly differently, let's try standard
+        await bot.user.edit(username=new_name)
+        await ctx.send(f"✅ Username changed to: **{new_name}**")
+    except Exception as e:
+        await ctx.send(f"❌ Failed. (Discord limits name changes to 2 per hour).\nError: {e}")
 
 @bot.command()
 async def join(ctx):
@@ -52,16 +104,20 @@ async def join(ctx):
     
     found = False
     for guild in bot.guilds:
+        # Check if the user who sent the command is in this guild
         member = guild.get_member(ctx.author.id)
+        
         if member and member.voice:
             try:
-                # self_deaf=False makes it look like you are listening
-                await member.voice.channel.connect(self_deaf=False) 
+                # IMPORTANT: User accounts cannot use 'self_deaf=True' easily in py-cord
+                # We just connect normally.
+                await member.voice.channel.connect() 
                 await ctx.send(f"👍 Joined **{member.voice.channel.name}** in **{guild.name}**!")
                 found = True
                 break
             except Exception as e:
-                await ctx.send(f"❌ Error joining: {e}")
+                # If py-cord fails to connect as user, print error
+                await ctx.send(f"❌ Connection Error: {e}")
                 return
 
     if not found:
@@ -73,7 +129,7 @@ async def joinid(ctx, channel_id: str):
     try:
         channel = bot.get_channel(int(channel_id))
         if isinstance(channel, discord.VoiceChannel):
-            await channel.connect(self_deaf=False)
+            await channel.connect()
             await ctx.send(f"👍 Joined **{channel.name}**")
         else:
             await ctx.send("❌ Not a voice channel.")
@@ -82,20 +138,41 @@ async def joinid(ctx, channel_id: str):
 
 @bot.command()
 async def record(ctx):
-    # This logic was removed because discord.py-self (User Lib) does not support Sinks
-    await ctx.send("❌ **Recording is unavailable.**\nYou are using a User Token. To record audio, you must switch back to a Bot Token (and lose the +name command).")
+    if len(bot.voice_clients) == 0:
+        return await ctx.send("❌ I am not in a VC.")
+    
+    vc = bot.voice_clients[0]
+    if vc.recording:
+        return await ctx.send("Already recording.")
+
+    # py-cord Sinks work here because we are using py-cord library!
+    vc.start_recording(
+        discord.sinks.MP3Sink(), 
+        finished_callback, 
+        ctx.channel 
+    )
+    
+    ist = pytz.timezone('Asia/Kolkata')
+    start_time = datetime.datetime.now(ist).strftime("%I:%M %p")
+    await ctx.send(f"🔴 **Recording Started at {start_time} IST!**")
 
 @bot.command()
 async def stop(ctx):
-    if ctx.voice_client:
-        await ctx.voice_client.disconnect()
-        await ctx.send("🛑 Disconnected.")
-    else:
-        await ctx.send("I am not connected.")
+    if len(bot.voice_clients) == 0:
+        return await ctx.send("Not connected.")
+
+    vc = bot.voice_clients[0]
+    
+    if vc.recording:
+        vc.stop_recording()
+        await ctx.send("🛑 Processing...")
+    
+    await asyncio.sleep(1)
+    await vc.disconnect()
 
 if __name__ == "__main__":
     if not TOKEN:
         print("Error: DISCORD_TOKEN not found.")
     else:
-        # Standard run() works for User Tokens in discord.py-self
+        # Run normally (The patch at the top handles the User Token)
         bot.run(TOKEN)
