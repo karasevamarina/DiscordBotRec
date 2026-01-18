@@ -8,10 +8,12 @@ import discord.http
 import json
 import urllib.request
 import aiohttp 
-import subprocess # NEW: Required for merging
+import subprocess 
+import time
+import io
 
 # ==========================================
-# ☢️ THE "NUCLEAR" PATCH v11 (Record All & Merge)
+# ☢️ THE "NUCLEAR" PATCH v12 (True Silence Sync)
 # ==========================================
 
 # 1. Login Patch
@@ -117,39 +119,76 @@ discord.http.HTTPClient.request = patched_request
 discord.abc.Messageable.send = direct_send
 
 # ==========================================
-# 🎵 MERGE FUNCTIONALITY (FFMPEG)
+# 🧠 CUSTOM SINK (THE SILENCE FIX)
 # ==========================================
-async def merge_audio_files(file_list, output_filename):
-    if not file_list:
-        return None
+class SyncWaveSink(discord.sinks.WaveSink):
+    def __init__(self):
+        super().__init__()
+        self.start_time = None
+        # Discord Audio: 48000 Hz, 2 Channels (Stereo), 16-bit (2 bytes)
+        # Bytes per second = 48000 * 2 * 2 = 192,000
+        self.bytes_per_second = 192000
+
+    def write(self, user_id, data):
+        if self.start_time is None:
+            self.start_time = time.time()
+
+        if user_id not in self.audio_data:
+            self.audio_data[user_id] = discord.sinks.core.AudioData(io.BytesIO())
+
+        file = self.audio_data[user_id].file
         
-    # Build FFmpeg command to mix audio
-    # command: ffmpeg -i 1.mp3 -i 2.mp3 -filter_complex amix=inputs=2:duration=longest output.mp3
-    
-    cmd = ['ffmpeg', '-y'] # -y overwrites output
-    for f in file_list:
-        cmd.extend(['-i', f])
+        # 1. Calculate Expected Size based on Time
+        elapsed_seconds = time.time() - self.start_time
+        expected_bytes = int(elapsed_seconds * self.bytes_per_second)
         
-    # Complex filter to mix N inputs
-    cmd.extend(['-filter_complex', f'amix=inputs={len(file_list)}:duration=longest:dropout_transition=3'])
-    cmd.append(output_filename)
+        # 2. Calculate Missing Silence
+        current_bytes = file.tell()
+        padding_needed = expected_bytes - current_bytes
+        
+        # 3. Inject Silence (Zeros) if lag > 20ms
+        if padding_needed > 3840: # 3840 bytes = 20ms (one packet)
+            # Limit padding to avoid memory crashes on huge lags (cap at 10s at a time)
+            chunk_size = min(padding_needed, 1920000) 
+            file.write(b'\x00' * chunk_size)
+            
+        # 4. Write Actual Audio
+        file.write(data)
+
+# ==========================================
+# 🎵 CONVERSION & MERGE
+# ==========================================
+async def convert_and_merge(file_list, output_filename, merge=False):
+    if not file_list: return None
     
-    try:
-        # Run FFmpeg in background
-        process = await asyncio.create_subprocess_exec(
-            *cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE
-        )
-        await process.communicate()
-        return output_filename
-    except Exception as e:
-        print(f"Merge Error: {e}")
-        return None
+    # If merging, mix everything
+    if merge:
+        cmd = ['ffmpeg', '-y']
+        for f in file_list:
+            cmd.extend(['-i', f])
+        # Mix + Compress to MP3
+        cmd.extend(['-filter_complex', f'amix=inputs={len(file_list)}:duration=longest:dropout_transition=3', '-b:a', '128k', output_filename])
+    
+    # If not merging, we just return the list (we convert individually in callback)
+    # The callback logic below handles individual conversion
+    else:
+        return None 
+        
+    process = await asyncio.create_subprocess_exec(*cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    await process.communicate()
+    return output_filename
+
+async def convert_wav_to_mp3(wav_filename, mp3_filename):
+    cmd = ['ffmpeg', '-y', '-i', wav_filename, '-b:a', '128k', mp3_filename]
+    process = await asyncio.create_subprocess_exec(*cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    await process.communicate()
+    return mp3_filename
 
 # ==========================================
 
 # --- CONFIGURATION ---
 TOKEN = os.getenv('DISCORD_TOKEN')
-MERGE_MODE = False # Global flag to track if we want merged output
+MERGE_MODE = False
 
 # --- SETUP ---
 intents = discord.Intents.default()
@@ -159,74 +198,71 @@ bot = commands.Bot(command_prefix='+', intents=intents, help_command=None)
 
 # --- HELPER FUNCTIONS ---
 async def finished_callback(sink, dest_channel, *args):
-    await dest_channel.send("✅ **Recording finished.** Processing filenames...")
+    await dest_channel.send("✅ **Recording finished.** Processing sync & filenames...")
     
-    saved_files = [] # For merging
-    discord_files = [] # For sending individual files
+    saved_wavs = []
+    final_files = []
     
     ist = pytz.timezone('Asia/Kolkata')
     now = datetime.datetime.now(ist)
     time_str = now.strftime("%I-%M-%p")
 
-    # 1. Process all individual files
+    # 1. Process Raw WAV data
     for user_id, audio in sink.audio_data.items():
         username = await asyncio.to_thread(fetch_real_name_sync, user_id, bot.http.token)
         safe_name = "".join(x for x in username if x.isalnum() or x in "._- ")
-        filename = f"{safe_name}_{time_str}.mp3"
         
-        # Save locally for merging
-        with open(filename, "wb") as f:
+        # Save Raw WAV
+        wav_name = f"{safe_name}_{time_str}.wav"
+        with open(wav_name, "wb") as f:
             f.write(audio.file.getbuffer())
-        saved_files.append(filename)
-        
-        # Prepare for Discord Upload (Reset pointer)
-        audio.file.seek(0)
-        discord_files.append(discord.File(audio.file, filename))
-
+        saved_wavs.append(wav_name)
+    
     global MERGE_MODE
     
     if MERGE_MODE:
-        # --- MERGE MODE ENABLED ---
-        await dest_channel.send("🔄 **Merging audio streams... (This might take a moment)**")
-        merged_filename = f"Conversation_{time_str}.mp3"
-        
-        result = await merge_audio_files(saved_files, merged_filename)
+        await dest_channel.send("🔄 **Merging synced audio...**")
+        merged_name = f"Conversation_{time_str}.mp3"
+        result = await convert_and_merge(saved_wavs, merged_name, merge=True)
         
         if result and os.path.exists(result):
-            # Send ONLY the merged file
             await dest_channel.send("Here is the full conversation:", file=discord.File(result))
-            os.remove(result) # Cleanup
+            os.remove(result)
         else:
-            await dest_channel.send("❌ Merge failed. Sending separate files instead.")
-            await dest_channel.send(files=discord_files)
-            
-        MERGE_MODE = False # Reset flag
+            await dest_channel.send("❌ Merge failed.")
     else:
-        # --- NORMAL MODE ---
-        if discord_files:
-            await dest_channel.send("Here are the recordings:", files=discord_files)
+        # Convert each WAV to MP3 individually
+        for wav in saved_wavs:
+            mp3_name = wav.replace(".wav", ".mp3")
+            await convert_wav_to_mp3(wav, mp3_name)
+            if os.path.exists(mp3_name):
+                final_files.append(discord.File(mp3_name))
+        
+        if final_files:
+            await dest_channel.send("Here are the synced recordings:", files=final_files)
         else:
-            await dest_channel.send("No audio was recorded (Silence).")
+            await dest_channel.send("No audio recorded.")
 
-    # Cleanup local temp files
-    for f in saved_files:
-        if os.path.exists(f):
-            os.remove(f)
+    # Cleanup WAVs and MP3s
+    for f in saved_wavs:
+        if os.path.exists(f): os.remove(f)
+    for f in final_files:
+        if os.path.exists(f.filename): os.remove(f.filename)
 
 # --- COMMANDS ---
 
 @bot.event
 async def on_ready():
     print(f'Logged in as "{bot.user.name}"')
-    print("✅ Nuclear Patch v11 (Merge Supported) Active.")
+    print("✅ Nuclear Patch v12 (SYNC ENGINE) Active.")
 
 @bot.command()
 async def help(ctx):
     msg = (
         "**🎙️ User Recorder**\n"
         "`+join` - Find you and join VC\n"
-        "`+record` - Record Separate Files\n"
-        "`+recordall` - Record & Merge into ONE file\n"
+        "`+record` - Synced Separate Files\n"
+        "`+recordall` - Synced & Merged File\n"
         "`+stop` - Stop & Upload\n"
         "`+name <text>` - Change Display Name"
     )
@@ -241,16 +277,14 @@ async def name(ctx, *, new_name: str):
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
     }
     payload = {"global_name": new_name}
-    
     session = bot.http._HTTPClient__session
     async with session.patch(url, json=payload, headers=headers) as resp:
         if resp.status == 200:
             await ctx.send(f"✅ Display Name changed to: **{new_name}**")
         elif resp.status == 429:
-            await ctx.send("❌ Rate Limited: Try again in 10 minutes.")
+            await ctx.send("❌ Rate Limited.")
         else:
-            text = await resp.text()
-            await ctx.send(f"❌ Failed ({resp.status}): {text}")
+            await ctx.send(f"❌ Failed: {resp.status}")
 
 @bot.command()
 async def join(ctx):
@@ -291,16 +325,17 @@ async def record(ctx):
         return await ctx.send("Already recording.")
 
     global MERGE_MODE
-    MERGE_MODE = False # Explicitly set to false
+    MERGE_MODE = False 
 
+    # USE CUSTOM SYNC SINK
     vc.start_recording(
-        discord.sinks.MP3Sink(), 
+        SyncWaveSink(), 
         finished_callback, 
         ctx.channel 
     )
     ist = pytz.timezone('Asia/Kolkata')
     start_time = datetime.datetime.now(ist).strftime("%I:%M %p")
-    await ctx.send(f"🔴 **Recording Started (Separate Files) at {start_time} IST!**")
+    await ctx.send(f"🔴 **Recording Started (Synced) at {start_time} IST!**")
 
 @bot.command()
 async def recordall(ctx):
@@ -310,18 +345,18 @@ async def recordall(ctx):
     if vc.recording:
         return await ctx.send("Already recording.")
 
-    # Enable Merging
     global MERGE_MODE
     MERGE_MODE = True 
 
+    # USE CUSTOM SYNC SINK
     vc.start_recording(
-        discord.sinks.MP3Sink(), 
+        SyncWaveSink(), 
         finished_callback, 
         ctx.channel 
     )
     ist = pytz.timezone('Asia/Kolkata')
     start_time = datetime.datetime.now(ist).strftime("%I:%M %p")
-    await ctx.send(f"🔴 **Recording Started (MERGE MODE) at {start_time} IST!**")
+    await ctx.send(f"🔴 **Recording Started (Synced + Merged) at {start_time} IST!**")
 
 @bot.command()
 async def stop(ctx):
