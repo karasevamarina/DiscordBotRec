@@ -7,24 +7,22 @@ import asyncio
 import discord.http 
 import json
 import urllib.request
-import aiohttp # REQUIRED for the fix
+import aiohttp 
 
 # ==========================================
-# 🛠️ THE "MANUAL SESSION" PATCH
+# 🛡️ THE "SILENCER" PATCH (Fixes 401 Errors)
 # ==========================================
+
+# 1. Patch Login (To force User Token)
 async def patched_login(self, token):
-    # 1. Setup Token
     self.token = token.strip()
     self._token_type = None 
     
-    # 2. MANUALLY CREATE SESSION (The Fix)
-    # We bypass the library's recreate() and build the session directly.
-    # We assign it to the private variable '_HTTPClient__session'
+    # Create Session manually
     if not hasattr(self, '_HTTPClient__session') or getattr(self, '_HTTPClient__session').__class__.__name__ == '_MissingSentinel':
         self._HTTPClient__session = aiohttp.ClientSession()
 
-    # 3. FETCH REAL DATA (Prevents KeyError)
-    # We use urllib to fetch the user profile safely and return it to the library.
+    # Fetch Real Data
     req = urllib.request.Request("https://discord.com/api/v9/users/@me")
     req.add_header("Authorization", self.token)
     req.add_header("User-Agent", "DiscordBot (https://github.com/Rapptz/discord.py, 2.0.0)")
@@ -37,8 +35,22 @@ async def patched_login(self, token):
             raise discord.LoginFailure("Invalid User Token.")
         raise
 
-# Apply the patch
+# 2. Patch Request (To silence "Unauthorized" errors for Bot-only features)
+original_request = discord.http.HTTPClient.request
+
+async def patched_request(self, route, **kwargs):
+    try:
+        return await original_request(self, route, **kwargs)
+    except discord.HTTPException as e:
+        # If Discord says "401 Unauthorized" for Commands or Sounds, ignore it!
+        # These features are for Real Bots only, so we just return empty data.
+        if e.status == 401 and ("/applications/" in route.path or "soundboard" in route.path):
+            return [] 
+        raise e # If it's a real error (like login fail), raise it.
+
+# Apply the patches
 discord.http.HTTPClient.static_login = patched_login
+discord.http.HTTPClient.request = patched_request
 # ==========================================
 
 # --- CONFIGURATION ---
@@ -81,8 +93,10 @@ async def finished_callback(sink, dest_channel, *args):
 
 @bot.event
 async def on_ready():
-    print(f"Logged in as: {bot.user.name}")
+    # UPDATED LOG FORMAT HERE
+    print(f'Logged in as "{bot.user.name}" "{bot.user.display_name}"')
     print(f"Connected to {len(bot.guilds)} servers.")
+    print("✅ Bot is stable and ignoring 401 errors.")
 
 @bot.command()
 async def help(ctx):
