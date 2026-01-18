@@ -10,7 +10,7 @@ import urllib.request
 import aiohttp 
 
 # ==========================================
-# ☢️ THE "NUCLEAR" PATCH v8 (Sync & Names)
+# ☢️ THE "NUCLEAR" PATCH v10 (Crash Fix & Stable)
 # ==========================================
 
 # 1. Login Patch
@@ -97,7 +97,7 @@ async def patched_request(self, route, **kwargs):
             return []
         raise e
 
-# 4. Helper: DIRECT NAME FETCH (Uses urllib to guarantee success)
+# 4. Helper: DIRECT NAME FETCH
 def fetch_real_name_sync(user_id, token):
     url = f"https://discord.com/api/v9/users/{user_id}"
     req = urllib.request.Request(url)
@@ -133,17 +133,16 @@ async def finished_callback(sink, dest_channel, *args):
     files = []
     ist = pytz.timezone('Asia/Kolkata')
     now = datetime.datetime.now(ist)
-    time_str = now.strftime("%d-%m-%Y_%I-%M-%p")
+    time_str = now.strftime("%I-%M-%p") # e.g., 01-45-AM
 
     for user_id, audio in sink.audio_data.items():
-        # USE DIRECT SYNC FETCH (Fixes the User_994 issue)
+        # Get Real Name
         username = await asyncio.to_thread(fetch_real_name_sync, user_id, bot.http.token)
-            
-        # Clean the name
         safe_name = "".join(x for x in username if x.isalnum() or x in "._- ")
         
-        # Format: Username_Date_Time_IST.mp3
-        filename = f"{safe_name}_{time_str}_IST.mp3"
+        # New Format: Name_SessionTime.mp3
+        # This helps you remember WHEN the session started
+        filename = f"{safe_name}_{time_str}.mp3"
         
         audio.file.seek(0)
         files.append(discord.File(audio.file, filename))
@@ -158,7 +157,7 @@ async def finished_callback(sink, dest_channel, *args):
 @bot.event
 async def on_ready():
     print(f'Logged in as "{bot.user.name}"')
-    print("✅ Nuclear Patch v8 Active.")
+    print("✅ Nuclear Patch v10 (Stable) Active.")
 
 @bot.command()
 async def help(ctx):
@@ -230,10 +229,9 @@ async def record(ctx):
     if vc.recording:
         return await ctx.send("Already recording.")
 
-    # ADDED FILTERS TO FIX SILENCE SYNC
-    # 'aresample=async=1' tries to keep audio synced with wall clock time
+    # FIXED: Removed the 'options' argument that caused the crash
     vc.start_recording(
-        discord.sinks.MP3Sink(options={'options': '-af aresample=async=1'}), 
+        discord.sinks.MP3Sink(), 
         finished_callback, 
         ctx.channel 
     )
