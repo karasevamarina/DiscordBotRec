@@ -10,22 +10,22 @@ import urllib.request
 import aiohttp 
 
 # ==========================================
-# 🛡️ THE "SILENCER & HEADER" PATCH
+# 🕵️ THE "STEALTH MODE" PATCH
 # ==========================================
 
-# 1. Patch Login (To force User Token & Session)
+# 1. Patch Login (Login as User, Create Session, Store Token)
 async def patched_login(self, token):
     self.token = token.strip()
-    self._token_type = "" # Empty string for User Token
+    self._token_type = "" # Clear this to avoid "Bot " prefix logic
     
-    # Create Session manually
+    # Create Session manually if missing
     if not hasattr(self, '_HTTPClient__session') or getattr(self, '_HTTPClient__session').__class__.__name__ == '_MissingSentinel':
         self._HTTPClient__session = aiohttp.ClientSession()
 
-    # Fetch Real Data via urllib (Bypasses library headers completely)
+    # Fetch Real Data (using stealth headers)
     req = urllib.request.Request("https://discord.com/api/v9/users/@me")
     req.add_header("Authorization", self.token)
-    req.add_header("User-Agent", "DiscordBot (https://github.com/Rapptz/discord.py, 2.0.0)")
+    req.add_header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
     
     try:
         with urllib.request.urlopen(req) as response:
@@ -35,21 +35,26 @@ async def patched_login(self, token):
             raise discord.LoginFailure("Invalid User Token.")
         raise
 
-# 2. Patch Request (Forces Raw Header & Silences 401s for Bot features)
+# 2. Patch Request (The Critical Fix for 401 Errors)
 original_request = discord.http.HTTPClient.request
 
 async def patched_request(self, route, **kwargs):
-    # FORCE RAW HEADER (The Fix for 401 on ctx.send)
     headers = kwargs.get('headers', {})
-    headers['Authorization'] = self.token # Overwrite with raw token
+    
+    # SPOOF USER AGENT (Discord blocks 'DiscordBot' UA on User Tokens)
+    headers['User-Agent'] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+    
+    # FORCE RAW AUTHORIZATION (No "Bot " prefix, no spaces)
+    headers['Authorization'] = self.token
+    
     kwargs['headers'] = headers
 
     try:
         return await original_request(self, route, **kwargs)
     except discord.HTTPException as e:
-        # Silence "Unauthorized" for Bot-only features (Slash commands/Sounds)
-        if e.status == 401 and ("/applications/" in route.path or "soundboard" in route.path):
-            return [] 
+        # Ignore 401s for Bot-specific endpoints that Users can't access
+        if e.status == 401 and ("/applications/" in route.path or "soundboard" in route.path or "interaction" in route.path):
+            return []
         raise e 
 
 # Apply the patches
@@ -68,7 +73,7 @@ bot = commands.Bot(command_prefix='+', intents=intents, help_command=None)
 
 # --- HELPER FUNCTIONS ---
 async def finished_callback(sink, dest_channel, *args):
-    # PLAIN TEXT RESPONSE
+    # Plain text response for safety
     await dest_channel.send("✅ **Recording finished.** Processing filenames...")
     
     files = []
@@ -98,16 +103,14 @@ async def finished_callback(sink, dest_channel, *args):
 
 @bot.event
 async def on_ready():
-    print(f'Logged in as "{bot.user.name}" "{bot.user.display_name}"')
-    print(f"Connected to {len(bot.guilds)} servers.")
-    print("✅ Bot is stable.")
+    print(f'Logged in as "{bot.user.name}"')
+    print("✅ Stealth Mode Active. Ready to record.")
 
 @bot.command()
 async def help(ctx):
-    # PLAIN TEXT HELP (No Embeds allowed for Users)
+    # Plain text help menu
     msg = (
         "**🎙️ User Recorder**\n"
-        "Commands:\n"
         "`+join` - Find you and join VC\n"
         "`+joinid <id>` - Join specific Channel ID\n"
         "`+record` - Start recording\n"
