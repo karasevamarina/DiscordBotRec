@@ -10,7 +10,7 @@ import urllib.request
 import aiohttp 
 
 # ==========================================
-# ☢️ THE "NUCLEAR" PATCH v6 (Fixes Names & Uploads)
+# ☢️ THE "NUCLEAR" PATCH v8 (Sync & Names)
 # ==========================================
 
 # 1. Login Patch
@@ -97,6 +97,20 @@ async def patched_request(self, route, **kwargs):
             return []
         raise e
 
+# 4. Helper: DIRECT NAME FETCH (Uses urllib to guarantee success)
+def fetch_real_name_sync(user_id, token):
+    url = f"https://discord.com/api/v9/users/{user_id}"
+    req = urllib.request.Request(url)
+    req.add_header("Authorization", token)
+    req.add_header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+    
+    try:
+        with urllib.request.urlopen(req) as response:
+            data = json.loads(response.read().decode())
+            return data.get('global_name') or data.get('username')
+    except:
+        return f"User_{user_id}"
+
 # Apply Patches
 discord.http.HTTPClient.static_login = patched_login
 discord.http.HTTPClient.request = patched_request
@@ -122,23 +136,12 @@ async def finished_callback(sink, dest_channel, *args):
     time_str = now.strftime("%d-%m-%Y_%I-%M-%p")
 
     for user_id, audio in sink.audio_data.items():
-        # --- FIXED NAME FETCHING ---
-        try:
-            # First try to get from cache
-            user = bot.get_user(user_id)
-            if not user:
-                # If missing, FORCE FETCH from API (Fixes "User_994...")
-                user = await bot.fetch_user(user_id)
-            
-            username = user.display_name
-        except:
-            # Fallback if internet fails
-            username = f"User_{user_id}"
+        # USE DIRECT SYNC FETCH (Fixes the User_994 issue)
+        username = await asyncio.to_thread(fetch_real_name_sync, user_id, bot.http.token)
             
         # Clean the name
         safe_name = "".join(x for x in username if x.isalnum() or x in "._- ")
         
-        # --- FIXED FILENAME FORMAT ---
         # Format: Username_Date_Time_IST.mp3
         filename = f"{safe_name}_{time_str}_IST.mp3"
         
@@ -148,14 +151,14 @@ async def finished_callback(sink, dest_channel, *args):
     if files:
         await dest_channel.send(f"Here are the recordings:", files=files)
     else:
-        await dest_channel.send("No audio was recorded (Discord ignores silence).")
+        await dest_channel.send("No audio was recorded (Silence).")
 
 # --- COMMANDS ---
 
 @bot.event
 async def on_ready():
     print(f'Logged in as "{bot.user.name}"')
-    print("✅ Nuclear Patch v6 Active.")
+    print("✅ Nuclear Patch v8 Active.")
 
 @bot.command()
 async def help(ctx):
@@ -177,7 +180,6 @@ async def name(ctx, *, new_name: str):
         "Content-Type": "application/json",
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
     }
-    # Using global_name to avoid password requirement
     payload = {"global_name": new_name}
     
     session = bot.http._HTTPClient__session
@@ -198,7 +200,6 @@ async def join(ctx):
         member = guild.get_member(ctx.author.id)
         if member and member.voice:
             try:
-                # self_deaf removed to prevent crash
                 await member.voice.channel.connect() 
                 await ctx.send(f"👍 Joined **{member.voice.channel.name}** in **{guild.name}**!")
                 found = True
@@ -214,7 +215,6 @@ async def joinid(ctx, channel_id: str):
     try:
         channel = bot.get_channel(int(channel_id))
         if isinstance(channel, discord.VoiceChannel):
-            # self_deaf removed to prevent crash
             await channel.connect()
             await ctx.send(f"👍 Joined **{channel.name}**")
         else:
@@ -230,8 +230,10 @@ async def record(ctx):
     if vc.recording:
         return await ctx.send("Already recording.")
 
+    # ADDED FILTERS TO FIX SILENCE SYNC
+    # 'aresample=async=1' tries to keep audio synced with wall clock time
     vc.start_recording(
-        discord.sinks.MP3Sink(), 
+        discord.sinks.MP3Sink(options={'options': '-af aresample=async=1'}), 
         finished_callback, 
         ctx.channel 
     )
