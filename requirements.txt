@@ -1,3 +1,4 @@
 py-cord[voice]
 pynacl
 pytz
+aiohttp
