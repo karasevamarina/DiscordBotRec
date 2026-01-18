@@ -10,7 +10,7 @@ import urllib.request
 import aiohttp 
 
 # ==========================================
-# ☢️ THE "NUCLEAR" PATCH v5 (Fixes Uploads & Join)
+# ☢️ THE "NUCLEAR" PATCH v6 (Fixes Names & Uploads)
 # ==========================================
 
 # 1. Login Patch
@@ -33,7 +33,7 @@ async def patched_login(self, token):
             raise discord.LoginFailure("Invalid User Token.")
         raise
 
-# 2. DIRECT SEND (Improved File Uploader)
+# 2. DIRECT SEND (File Uploads)
 async def direct_send(self, content=None, **kwargs):
     if hasattr(self, 'channel'):
         channel_id = self.channel.id 
@@ -47,24 +47,19 @@ async def direct_send(self, content=None, **kwargs):
     global bot
     session = bot.http._HTTPClient__session
     
-    # Base Headers
     headers = {
         "Authorization": bot.http.token,
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
     }
 
-    # HANDLE FILES (Fixed Logic)
     files = kwargs.get('files')
     if files:
         data = aiohttp.FormData()
-        
-        # 1. Add JSON Payload
         if content:
             data.add_field('payload_json', json.dumps({'content': str(content)}))
         
-        # 2. Add Files
         for i, file in enumerate(files):
-            file.fp.seek(0) # Reset file pointer
+            file.fp.seek(0)
             data.add_field(
                 f'files[{i}]', 
                 file.fp, 
@@ -72,19 +67,13 @@ async def direct_send(self, content=None, **kwargs):
                 content_type='audio/mpeg' 
             )
         
-        # Send Multipart (Header is auto-set)
         headers.pop("Content-Type", None) 
         try:
             async with session.post(url, data=data, headers=headers) as resp:
-                if resp.status != 200:
-                    text = await resp.text()
-                    print(f"❌ Upload Failed: {resp.status} - {text}")
                 return await resp.json()
-        except Exception as e:
-            print(f"❌ Upload Error: {e}")
+        except:
             return None
     else:
-        # Standard Text Send
         headers["Content-Type"] = "application/json"
         payload = {}
         if content:
@@ -93,7 +82,7 @@ async def direct_send(self, content=None, **kwargs):
         async with session.post(url, json=payload, headers=headers) as resp:
             return await resp.json()
 
-# 3. Patch Request
+# 3. Request Patch
 original_request = discord.http.HTTPClient.request
 async def patched_request(self, route, **kwargs):
     headers = kwargs.get('headers', {})
@@ -125,7 +114,7 @@ bot = commands.Bot(command_prefix='+', intents=intents, help_command=None)
 
 # --- HELPER FUNCTIONS ---
 async def finished_callback(sink, dest_channel, *args):
-    await dest_channel.send("✅ **Recording finished.** Uploading...")
+    await dest_channel.send("✅ **Recording finished.** Processing filenames...")
     
     files = []
     ist = pytz.timezone('Asia/Kolkata')
@@ -133,13 +122,24 @@ async def finished_callback(sink, dest_channel, *args):
     time_str = now.strftime("%d-%m-%Y_%I-%M-%p")
 
     for user_id, audio in sink.audio_data.items():
-        user = bot.get_user(user_id)
-        if user:
+        # --- FIXED NAME FETCHING ---
+        try:
+            # First try to get from cache
+            user = bot.get_user(user_id)
+            if not user:
+                # If missing, FORCE FETCH from API (Fixes "User_994...")
+                user = await bot.fetch_user(user_id)
+            
             username = user.display_name
-        else:
+        except:
+            # Fallback if internet fails
             username = f"User_{user_id}"
             
+        # Clean the name
         safe_name = "".join(x for x in username if x.isalnum() or x in "._- ")
+        
+        # --- FIXED FILENAME FORMAT ---
+        # Format: Username_Date_Time_IST.mp3
         filename = f"{safe_name}_{time_str}_IST.mp3"
         
         audio.file.seek(0)
@@ -148,14 +148,14 @@ async def finished_callback(sink, dest_channel, *args):
     if files:
         await dest_channel.send(f"Here are the recordings:", files=files)
     else:
-        await dest_channel.send("No audio was recorded.")
+        await dest_channel.send("No audio was recorded (Discord ignores silence).")
 
 # --- COMMANDS ---
 
 @bot.event
 async def on_ready():
     print(f'Logged in as "{bot.user.name}"')
-    print("✅ Nuclear Patch v5 Active.")
+    print("✅ Nuclear Patch v6 Active.")
 
 @bot.command()
 async def help(ctx):
@@ -177,6 +177,7 @@ async def name(ctx, *, new_name: str):
         "Content-Type": "application/json",
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
     }
+    # Using global_name to avoid password requirement
     payload = {"global_name": new_name}
     
     session = bot.http._HTTPClient__session
@@ -186,7 +187,6 @@ async def name(ctx, *, new_name: str):
         elif resp.status == 429:
             await ctx.send("❌ Rate Limited: Try again in 10 minutes.")
         else:
-            # Print the real error from Discord to debug
             text = await resp.text()
             await ctx.send(f"❌ Failed ({resp.status}): {text}")
 
@@ -198,7 +198,7 @@ async def join(ctx):
         member = guild.get_member(ctx.author.id)
         if member and member.voice:
             try:
-                # REMOVED self_deaf=False (Fixes the crash)
+                # self_deaf removed to prevent crash
                 await member.voice.channel.connect() 
                 await ctx.send(f"👍 Joined **{member.voice.channel.name}** in **{guild.name}**!")
                 found = True
@@ -214,7 +214,7 @@ async def joinid(ctx, channel_id: str):
     try:
         channel = bot.get_channel(int(channel_id))
         if isinstance(channel, discord.VoiceChannel):
-            # REMOVED self_deaf=False (Fixes the crash)
+            # self_deaf removed to prevent crash
             await channel.connect()
             await ctx.send(f"👍 Joined **{channel.name}**")
         else:
