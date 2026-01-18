@@ -10,12 +10,11 @@ import urllib.request
 import aiohttp 
 
 # ==========================================
-# ☢️ THE "NUCLEAR" PATCH (Direct API Sending v2)
+# ☢️ THE "NUCLEAR" PATCH (Direct API Sending v3)
 # ==========================================
 
 # 1. Login Patch (Standard User Token Login)
 async def patched_login(self, token):
-    # Strip quotes/spaces to prevent token errors
     self.token = token.strip().strip('"')
     self._token_type = ""
     
@@ -36,20 +35,17 @@ async def patched_login(self, token):
             raise discord.LoginFailure("Invalid User Token.")
         raise
 
-# 2. THE NEW SEND FUNCTION (Fixed ID Logic)
+# 2. THE DIRECT SEND FUNCTION (For Messages)
 async def direct_send(self, content=None, **kwargs):
-    # FIX: Correctly find the Channel ID
     if hasattr(self, 'channel'):
-        channel_id = self.channel.id # If 'self' is Context
+        channel_id = self.channel.id 
     elif hasattr(self, 'id'):
-        channel_id = self.id # If 'self' is a Channel
+        channel_id = self.id 
     else:
-        print("❌ Error: Could not find Channel ID for sending.")
         return
 
     url = f"https://discord.com/api/v9/channels/{channel_id}/messages"
     
-    # Build payload
     payload = {}
     if content:
         payload['content'] = str(content)
@@ -63,19 +59,16 @@ async def direct_send(self, content=None, **kwargs):
 
     session = bot.http._HTTPClient__session
     
-    # If sending files, fallback to original logic (handled by patched_request)
     if kwargs.get('files'):
         return await original_send(self, content, **kwargs)
         
     async with session.post(url, json=payload, headers=headers) as resp:
-        if resp.status == 401:
-            print("❌ Critical: 401 Unauthorized even on direct send.")
         try:
             return await resp.json()
         except:
             return None
 
-# 3. Patch Request (Backup for Files/Voice)
+# 3. Patch Request (Backup)
 original_request = discord.http.HTTPClient.request
 async def patched_request(self, route, **kwargs):
     headers = kwargs.get('headers', {})
@@ -86,15 +79,13 @@ async def patched_request(self, route, **kwargs):
     try:
         return await original_request(self, route, **kwargs)
     except discord.HTTPException as e:
-        if e.status == 401 and ("/applications/" in route.path or "soundboard" in route.path):
+        if e.status == 401:
             return []
         raise e
 
 # Apply Patches
 discord.http.HTTPClient.static_login = patched_login
 discord.http.HTTPClient.request = patched_request
-
-# Save/Overwrite Send
 original_send = discord.abc.Messageable.send
 discord.abc.Messageable.send = direct_send
 # ==========================================
@@ -110,7 +101,6 @@ bot = commands.Bot(command_prefix='+', intents=intents, help_command=None)
 
 # --- HELPER FUNCTIONS ---
 async def finished_callback(sink, dest_channel, *args):
-    # Use ORIGINAL send for files (Multipart logic is hard to replicate)
     await original_send(dest_channel, "✅ **Recording finished.** Processing filenames...")
     
     files = []
@@ -141,7 +131,7 @@ async def finished_callback(sink, dest_channel, *args):
 @bot.event
 async def on_ready():
     print(f'Logged in as "{bot.user.name}"')
-    print("✅ Nuclear Patch v2 Active. Ready to record.")
+    print("✅ All Systems Operational.")
 
 @bot.command()
 async def help(ctx):
@@ -157,11 +147,32 @@ async def help(ctx):
 
 @bot.command()
 async def name(ctx, *, new_name: str):
-    try:
-        await bot.user.edit(username=new_name)
-        await ctx.send(f"✅ Username changed to: **{new_name}**")
-    except Exception as e:
-        await ctx.send(f"❌ Failed: {e}")
+    # DIRECT API CALL (Fixes 401 Error)
+    url = "https://discord.com/api/v9/users/@me"
+    
+    headers = {
+        "Authorization": bot.http.token,
+        "Content-Type": "application/json",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+    }
+    
+    payload = {"username": new_name}
+    
+    session = bot.http._HTTPClient__session
+    async with session.patch(url, json=payload, headers=headers) as resp:
+        if resp.status == 200:
+            await ctx.send(f"✅ Username changed to: **{new_name}**")
+        elif resp.status == 400:
+            # Check if password is required (Discord security feature)
+            data = await resp.json()
+            if 'password' in data:
+                 await ctx.send("❌ Error: Discord requires your password to change your name. I cannot do this.")
+            else:
+                 await ctx.send(f"❌ Validation Error: {data}")
+        elif resp.status == 429:
+            await ctx.send("❌ Rate Limited: You are changing names too fast (Max 2 per hour).")
+        else:
+            await ctx.send(f"❌ Failed with Status: {resp.status}")
 
 @bot.command()
 async def join(ctx):
