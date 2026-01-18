@@ -4,26 +4,34 @@ import os
 import datetime
 import pytz 
 import asyncio
-import discord.http # Required for the patch
+import discord.http 
+import aiohttp # NEW: Required for the fix
 
 # ==========================================
-# 🔓 THE USER TOKEN PATCH
-# This section "tricks" py-cord to use a User Token
+# 🔓 THE "ROBUST" USER TOKEN PATCH
 # ==========================================
 async def patched_login(self, token):
-    # Set the token directly (WITHOUT the "Bot " prefix)
-    self.token = token.strip()
-    self._token_type = None # Prevents library from adding "Bot " headers
+    # Remove whitespace
+    token = token.strip()
     
-    try:
-        data = await self.request(discord.http.Route('GET', '/users/@me'))
-    except discord.HTTPException as e:
-        if e.status == 401:
-            raise discord.LoginFailure('Invalid User Token.') from e
-        raise
-    return data
+    # 1. Set the token internally so the library has it
+    self.token = token
+    self._token_type = None # This stops the library from adding "Bot " to requests
+    
+    # 2. Manually verify the token using a temporary session
+    # We do this because the bot's internal session isn't ready yet (Fixes your error)
+    async with aiohttp.ClientSession() as session:
+        headers = {"Authorization": token} # Send raw token (No "Bot " prefix)
+        async with session.get("https://discord.com/api/v10/users/@me", headers=headers) as response:
+            if response.status == 401:
+                raise discord.LoginFailure("Invalid User Token passed.")
+            elif response.status != 200:
+                raise discord.HTTPException(response, "Login failed")
+            
+            # Return the user data so the bot knows who it is
+            return await response.json()
 
-# Apply the patch to the library
+# Apply the fix
 discord.http.HTTPClient.static_login = patched_login
 # ==========================================
 
@@ -31,8 +39,6 @@ discord.http.HTTPClient.static_login = patched_login
 TOKEN = os.getenv('DISCORD_TOKEN')
 
 # --- SETUP ---
-# Self-bots don't need intents (they see everything), 
-# but we enable them just in case the library expects them.
 intents = discord.Intents.default()
 intents.message_content = True 
 
@@ -72,15 +78,16 @@ async def finished_callback(sink, dest_channel, *args):
 
 @bot.event
 async def on_ready():
-    print(f"Logged in as {bot.user} (User Mode via Patch)")
+    print(f"Logged in as {bot.user} (User Mode via Robust Patch)")
     print(f"Connected to {len(bot.guilds)} servers.")
 
 @bot.command()
 async def help(ctx):
-    embed = discord.Embed(title="🎙️ User Recorder (Patched)", color=discord.Color.green())
+    embed = discord.Embed(title="🎙️ User Recorder (Final)", color=discord.Color.green())
     embed.description = "Recording ENABLED on User Account!"
     
     embed.add_field(name="+join", value="Finds you and joins.", inline=False)
+    embed.add_field(name="+joinid <id>", value="Join specific ID.", inline=False)
     embed.add_field(name="+record", value="Start recording audio.", inline=False)
     embed.add_field(name="+stop", value="Stop and Upload.", inline=False)
     embed.add_field(name="+name <text>", value="Change display name.", inline=False)
@@ -109,8 +116,6 @@ async def join(ctx):
         
         if member and member.voice:
             try:
-                # IMPORTANT: User accounts cannot use 'self_deaf=True' easily in py-cord
-                # We just connect normally.
                 await member.voice.channel.connect() 
                 await ctx.send(f"👍 Joined **{member.voice.channel.name}** in **{guild.name}**!")
                 found = True
