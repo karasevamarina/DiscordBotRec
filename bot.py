@@ -8,7 +8,7 @@ import pytz
 TOKEN = os.getenv('DISCORD_TOKEN')
 
 # ⚠️ REPLACE WITH YOUR USER ID (NUMBERS ONLY)
-OWNER_ID = ENTER_YOUR_ID_HERE
+OWNER_ID = 1149195874845601842
 
 # --- SETUP ---
 intents = discord.Intents.default()
