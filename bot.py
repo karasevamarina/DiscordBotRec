@@ -13,7 +13,7 @@ import time
 import io
 
 # ==========================================
-# ☢️ THE "NUCLEAR" PATCH v18 (Merge Logic Fix)
+# ☢️ THE "NUCLEAR" PATCH v19 (Singular File Fix)
 # ==========================================
 
 # 1. Login Patch
@@ -36,7 +36,7 @@ async def patched_login(self, token):
             raise discord.LoginFailure("Invalid User Token.")
         raise
 
-# 2. DIRECT SEND
+# 2. DIRECT SEND (Fixed: Handles 'file' AND 'files')
 async def direct_send(self, content=None, **kwargs):
     if hasattr(self, 'channel'):
         channel_id = self.channel.id 
@@ -55,13 +55,24 @@ async def direct_send(self, content=None, **kwargs):
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
     }
 
-    files = kwargs.get('files')
-    if files:
+    # --- FIX START: Handle both 'file' and 'files' ---
+    files_to_send = []
+    
+    # Check for plural 'files'
+    if kwargs.get('files'):
+        files_to_send.extend(kwargs['files'])
+        
+    # Check for singular 'file' (This was missing!)
+    if kwargs.get('file'):
+        files_to_send.append(kwargs['file'])
+    # --- FIX END ---
+
+    if files_to_send:
         data = aiohttp.FormData()
         if content:
             data.add_field('payload_json', json.dumps({'content': str(content)}))
         
-        for i, file in enumerate(files):
+        for i, file in enumerate(files_to_send):
             file.fp.seek(0)
             data.add_field(
                 f'files[{i}]', 
@@ -122,7 +133,7 @@ discord.http.HTTPClient.request = patched_request
 discord.abc.Messageable.send = direct_send
 
 # ==========================================
-# 🧠 SYNC SINK (Static Fixed)
+# 🧠 SYNC SINK
 # ==========================================
 class SyncWaveSink(discord.sinks.WaveSink):
     def __init__(self):
@@ -154,7 +165,7 @@ class SyncWaveSink(discord.sinks.WaveSink):
         file.write(data)
 
 # ==========================================
-# 🎵 SAFE MERGE (Fixed Duration Logic)
+# 🎵 SAFE MERGE
 # ==========================================
 async def convert_and_merge(file_list, output_filename, duration):
     if not file_list: return None
@@ -163,7 +174,6 @@ async def convert_and_merge(file_list, output_filename, duration):
     for f in file_list:
         cmd.extend(['-i', f])
     
-    # CASE 1: Single File (Just pad and convert)
     if len(file_list) == 1:
          cmd.extend([
             '-af', 'apad', 
@@ -171,10 +181,7 @@ async def convert_and_merge(file_list, output_filename, duration):
             '-b:a', '128k', 
             output_filename
         ])
-         
-    # CASE 2: Multiple Files (Mix, then pad)
     else:
-        # Changed duration=first to duration=longest to prevent cutting
         cmd.extend([
             '-filter_complex', 
             f'amix=inputs={len(file_list)}:duration=longest:dropout_transition=3:normalize=0,apad', 
@@ -232,7 +239,6 @@ async def finished_callback(sink, dest_channel, *args):
     now = datetime.datetime.now(ist)
     time_str = now.strftime("%I-%M-%p")
 
-    # 1. Process Files
     i = 0
     for user_id, audio in sink.audio_data.items():
         username = None
@@ -266,8 +272,8 @@ async def finished_callback(sink, dest_channel, *args):
         
         result = await convert_and_merge(temp_wavs, merged_output, total_duration)
         
-        # ADDED FILE SIZE CHECK (Fixes ghost messages)
         if result and os.path.exists(result) and os.path.getsize(result) > 0:
+            # THIS LINE NOW WORKS BECAUSE 'file' IS HANDLED
             await dest_channel.send("Here is the full conversation:", 
                                   file=discord.File(result, filename=final_nice_name))
             os.remove(result)
@@ -297,7 +303,7 @@ async def finished_callback(sink, dest_channel, *args):
 @bot.event
 async def on_ready():
     print(f'Logged in as "{bot.user.name}"')
-    print("✅ Nuclear Patch v18 (Safe Merge Fix) Active.")
+    print("✅ Nuclear Patch v19 (Singular File Fix) Active.")
 
 @bot.command()
 async def help(ctx):
