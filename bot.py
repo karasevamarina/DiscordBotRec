@@ -12,10 +12,9 @@ import subprocess
 import time
 import io
 import math
-import yt_dlp
 
 # ==========================================
-# ☢️ THE "NUCLEAR" PATCH v42 (TV Embedded Bypass)
+# ☢️ THE "NUCLEAR" PATCH v33 (Master Fix)
 # ==========================================
 
 # 1. Login Patch (USER BOT MODE)
@@ -247,13 +246,6 @@ SECRET_KEY = os.getenv('KEY')
 if SECRET_KEY:
     SECRET_KEY = SECRET_KEY.strip()
 
-# CHECK FOR COOKIES (Optional but powerful)
-COOKIES_CONTENT = os.getenv('YOUTUBE_COOKIES')
-COOKIES_FILE = "cookies.txt"
-if COOKIES_CONTENT:
-    with open(COOKIES_FILE, "w") as f:
-        f.write(COOKIES_CONTENT)
-
 AUTHORIZED_USERS = set() 
 MERGE_MODE = False
 SESSION_START_TIME = None 
@@ -387,8 +379,9 @@ async def finished_callback(sink, dest_channel, *args):
     for f in temp_wavs:
         if os.path.exists(f): os.remove(f)
 
-# --- REUSABLE RECORDING FUNCTION ---
+# --- REUSABLE RECORDING FUNCTION (Fixed for User Bots) ---
 async def start_recording_logic(ctx, merge_flag):
+    # FIX: Use bot.voice_clients[0] instead of ctx.guild.voice_client
     if len(bot.voice_clients) == 0:
         return await ctx.send("❌ I am not in a VC.")
     
@@ -421,7 +414,7 @@ async def on_ready():
         print("✅ Secret Key Loaded.")
     else:
         print("⚠️ Warning: No 'KEY' secret found.")
-    print("✅ Nuclear Patch v42 (TV Embedded Bypass) Active.")
+    print("✅ Nuclear Patch v33 (Master Fix) Active.")
 
 @bot.command()
 async def login(ctx, *, key: str):
@@ -453,10 +446,7 @@ async def help(ctx):
         "`+stop` - Stop & Upload (**Stay in VC**)\n"
         "`+dc` - Stop & Upload (**Disconnect**)\n"
         "`+m` - Toggle Mute\n"
-        "`+deaf` - Toggle Deafen\n"
-        "\n**🎵 Audio Player**\n"
-        "`+play [url]` - Play attached/replied file or URL\n"
-        "`+pstop` - Stop Playback (Keep Recording)"
+        "`+deaf` - Toggle Deafen"
     )
     await ctx.send(msg)
 
@@ -508,7 +498,7 @@ async def m(ctx):
     payload = {
         "op": 4,
         "d": {
-            "guild_id": vc.channel.guild.id, 
+            "guild_id": vc.channel.guild.id, # <--- Direct ID access (Safe)
             "channel_id": vc.channel.id,
             "self_mute": new_mute,
             "self_deaf": current_deaf
@@ -545,8 +535,7 @@ async def deaf(ctx):
     status = "🔕 **Deafened**" if new_deaf else "🔔 **Undeafened**"
     await ctx.send(f"✅ Headset is now {status}.")
 
-# -------------------------------------------------------
-
+# --- JOIN & AUTO-REC LOGIC ---
 @bot.command()
 async def join(ctx):
     await ctx.send("🔍 Scanning servers...")
@@ -558,6 +547,7 @@ async def join(ctx):
             await ctx.send(f"👍 Joined **{member.voice.channel.name}** in **{guild.name}**!")
             found = True
             
+            # TRIGGER AUTO-REC
             if AUTO_REC_MODE:
                 await asyncio.sleep(1) 
                 is_merge = (AUTO_REC_MODE == 'merged')
@@ -574,6 +564,7 @@ async def joinid(ctx, channel_id: str):
         await channel.connect()
         await ctx.send(f"👍 Joined **{channel.name}**")
         
+        # TRIGGER AUTO-REC
         if AUTO_REC_MODE:
             await asyncio.sleep(1)
             is_merge = (AUTO_REC_MODE == 'merged')
@@ -614,99 +605,6 @@ async def dc(ctx):
     await asyncio.sleep(1) 
     await vc.disconnect()
     await ctx.send("👋 **Disconnected.**")
-
-# ==========================================
-# 🎵 AUDIO PLAYER MODULE (Separate Section)
-# ==========================================
-
-@bot.command()
-async def play(ctx, *, direct_url: str = None):
-    target_url = None
-    is_youtube = False
-
-    # 1. DIRECT URL CHECK
-    if direct_url:
-        target_url = direct_url.strip()
-        if "youtube.com" in target_url or "youtu.be" in target_url:
-            is_youtube = True
-    
-    # 2. ATTACHMENT CHECK
-    elif ctx.message.attachments:
-        target_url = ctx.message.attachments[0].url
-
-    if not target_url:
-        return await ctx.send("❌ **No audio found.** Provide a URL (YouTube/Direct) or attach a file.")
-
-    # 3. Check Connection
-    if len(bot.voice_clients) == 0:
-        return await ctx.send("❌ **Not in a VC.** Please use `+join` first.")
-    
-    vc = bot.voice_clients[0]
-
-    if vc.is_playing():
-        vc.stop()
-
-    # 4. Process
-    try:
-        final_url = target_url
-        ffmpeg_opts = {
-            'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
-            'options': '-vn' 
-        }
-
-        if is_youtube:
-            await ctx.send("🔍 **Processing YouTube Link...**")
-            # NUCLEAR FIX v42: USE TV_EMBEDDED CLIENT (Bypasses Datacenter Blocks)
-            ydl_opts = {
-                'format': 'bestaudio/best',
-                'noplaylist': True,
-                'quiet': True,
-                'nocheckcertificate': True,
-                'extractor_args': {
-                    'youtube': {
-                        'player_client': ['tv_embedded', 'web_embedded'] # <--- THE FIX
-                    }
-                },
-                'postprocessors': [{
-                    'key': 'FFmpegExtractAudio',
-                    'preferredcodec': 'mp3',
-                    'preferredquality': '192',
-                }],
-            }
-            
-            # COOKIE LOADING (Automatic if file exists)
-            if os.path.exists("cookies.txt"):
-                ydl_opts['cookiefile'] = "cookies.txt"
-                print("🍪 Loading cookies for YouTube...")
-
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = await asyncio.to_thread(ydl.extract_info, target_url, download=False)
-                final_url = info['url']
-
-        # 5. Play
-        source = discord.FFmpegPCMAudio(final_url, **ffmpeg_opts)
-        vc.play(source)
-        await ctx.send("▶️ **Playing Audio...**")
-        
-    except Exception as e:
-        err_msg = str(e)
-        if "Sign in to confirm" in err_msg:
-            await ctx.send("❌ **YouTube Critical Error:** Server IP is blacklisted. Use a direct MP3 link.")
-        else:
-            await ctx.send(f"❌ **Play Error:** {e}")
-
-@bot.command()
-async def pstop(ctx):
-    if len(bot.voice_clients) == 0:
-        return await ctx.send("❌ Not in a VC.")
-    
-    vc = bot.voice_clients[0]
-    
-    if vc.is_playing():
-        vc.stop()
-        await ctx.send("⏹️ **Stopped Playback.**")
-    else:
-        await ctx.send("❓ No audio is playing.")
 
 if __name__ == "__main__":
     if not TOKEN:
