@@ -2,3 +2,5 @@ py-cord[voice]
 pynacl
 pytz
 aiohttp
+yt-dlp
+ffmpeg-python
