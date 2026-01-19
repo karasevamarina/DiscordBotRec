@@ -206,7 +206,7 @@ async def convert_wav_to_mp3_padded(wav_filename, mp3_filename, duration):
 # --- CONFIGURATION ---
 TOKEN = os.getenv('DISCORD_TOKEN')
 
-# FIX 1: Auto-strip spaces from the Secret Key
+# FIX 1: Auto-Clean the Secret Key (Removes accidental newlines/spaces)
 SECRET_KEY = os.getenv('KEY')
 if SECRET_KEY:
     SECRET_KEY = SECRET_KEY.strip()
@@ -235,15 +235,15 @@ async def global_login_check(ctx):
         await ctx.send("❌ **Access Denied.** Please use `+login <key>` first.")
         return False
 
-# FIX 2: Silent Error Handler (Prevents Console Spam & Crash appearance)
+# FIX 2: Silent Error Handler (Prevents Console Spam for Login Checks)
 @bot.event
 async def on_command_error(ctx, error):
     if isinstance(error, commands.CheckFailure):
-        # We handled this in the check above (sent message), so just pass
+        # We handled this in the check above, so suppress the console error
         return
     if isinstance(error, commands.CommandNotFound):
         return
-    # Print real errors
+    # Print real errors only
     print(f"Command Error: {error}")
 
 # --- HELPER FUNCTIONS ---
@@ -328,7 +328,7 @@ async def finished_callback(sink, dest_channel, *args):
 async def on_ready():
     print(f'Logged in as "{bot.user.name}"')
     if SECRET_KEY:
-        print("✅ Secret Key Loaded (Login System Ready).")
+        print(f"✅ Secret Key Loaded (Login System Ready). Key Length: {len(SECRET_KEY)}")
     else:
         print("⚠️ Warning: No 'KEY' secret found. Login commands will fail.")
     print("✅ Nuclear Patch v21 (Smart Login & Clean Logs) Active.")
@@ -341,7 +341,7 @@ async def login(ctx, key: str):
     if ctx.author.id in AUTHORIZED_USERS:
         return await ctx.send("✅ You are already logged in.")
 
-    # FIX 3: Compare STRIPPED strings (Ignores spaces)
+    # FIX 3: Compare cleaned strings
     if SECRET_KEY and key.strip() == SECRET_KEY:
         AUTHORIZED_USERS.add(ctx.author.id)
         await ctx.send(f"✅ **Access Granted.** Welcome, {ctx.author.display_name}.")
