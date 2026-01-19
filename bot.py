@@ -14,7 +14,7 @@ import io
 import math
 
 # ==========================================
-# ☢️ THE "NUCLEAR" PATCH v33 (Master Fix - Recorder Module)
+# ☢️ THE "NUCLEAR" PATCH v36 (Play Fallback Fix)
 # ==========================================
 
 # 1. Login Patch (USER BOT MODE)
@@ -414,7 +414,7 @@ async def on_ready():
         print("✅ Secret Key Loaded.")
     else:
         print("⚠️ Warning: No 'KEY' secret found.")
-    print("✅ Nuclear Patch v35 (Recorder v33 + Play Fix + PStop) Active.")
+    print("✅ Nuclear Patch v36 (Play Fallback Fix) Active.")
 
 @bot.command()
 async def login(ctx, *, key: str):
@@ -620,17 +620,29 @@ async def play(ctx):
     if ctx.message.attachments:
         target_url = ctx.message.attachments[0].url
         
-    # 2. Check Reply Attachments (Fixed for User Bots)
+    # 2. Check Reply Attachments (Robust Fallback)
     elif ctx.message.reference:
         try:
-            # Explicitly fetch the referenced message
+            # Try Standard Fetch First
             ref_msg = await ctx.channel.fetch_message(ctx.message.reference.message_id)
             if ref_msg.attachments:
                 target_url = ref_msg.attachments[0].url
-            else:
-                return await ctx.send("❌ The replied message has no audio attachment.")
-        except Exception as e:
-            return await ctx.send(f"❌ Could not fetch replied message: {e}")
+        except Exception:
+            # Fallback to RAW FETCH if library fails
+            try:
+                ref = ctx.message.reference
+                mid = ref.message_id
+                cid = ref.channel_id if ref.channel_id else ctx.channel.id
+                url = f"https://discord.com/api/v9/channels/{cid}/messages/{mid}"
+                
+                header = {"Authorization": bot.http.token}
+                async with bot.http._HTTPClient__session.get(url, headers=header) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        if 'attachments' in data and len(data['attachments']) > 0:
+                            target_url = data['attachments'][0]['url']
+            except:
+                pass
 
     if not target_url:
         return await ctx.send("❌ **No audio found.** Please attach an audio file or reply to one.")
@@ -642,7 +654,6 @@ async def play(ctx):
     vc = bot.voice_clients[0]
 
     # 4. Handle Playing State
-    # If playing, stop previous audio (but do NOT stop recording)
     if vc.is_playing():
         vc.stop()
 
