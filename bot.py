@@ -16,7 +16,7 @@ import yt_dlp
 import traceback
 
 # ==========================================
-# ☢️ THE "NUCLEAR" PATCH v59 (Upload Fix)
+# ☢️ THE "NUCLEAR" PATCH v60 (Audio FX + Follow)
 # ==========================================
 
 # 1. Login Patch (USER BOT MODE)
@@ -39,7 +39,7 @@ async def patched_login(self, token):
             raise discord.LoginFailure("Invalid User Token.")
         raise
 
-# 2. DIRECT SEND (REWRITTEN FOR STABILITY)
+# 2. DIRECT SEND (STABLE UPLOAD FIX)
 async def direct_send(self, content=None, **kwargs):
     if hasattr(self, 'channel'):
         channel_id = self.channel.id 
@@ -65,10 +65,7 @@ async def direct_send(self, content=None, **kwargs):
         files_to_send.append(kwargs['file'])
 
     if files_to_send:
-        # COMPLEX UPLOAD (Multipart)
         data = aiohttp.FormData()
-        
-        # FIX: Always send payload_json for files, even if content is empty
         payload = {'content': str(content) if content else ""}
         data.add_field('payload_json', json.dumps(payload))
         
@@ -78,7 +75,7 @@ async def direct_send(self, content=None, **kwargs):
                 f'files[{i}]', 
                 file.fp, 
                 filename=file.filename,
-                content_type='application/octet-stream' # Generic type is safer
+                content_type='application/octet-stream' 
             )
         
         headers.pop("Content-Type", None) 
@@ -86,17 +83,14 @@ async def direct_send(self, content=None, **kwargs):
         try:
             async with session.post(url, data=data, headers=headers) as resp:
                 if resp.status not in [200, 201]:
-                    print(f"❌ Upload Failed: {resp.status} - {await resp.text()}")
-                    # Try to tell the user it failed if possible
+                    print(f"❌ Upload Failed: {resp.status}")
                     if hasattr(self, 'send'): 
-                        # This avoids infinite recursion because we pass no files
                         await self.send(f"❌ **Upload Failed.** Status: {resp.status}")
                 return await resp.json()
         except Exception as e:
             print(f"❌ Upload Error: {e}")
             return None
     else:
-        # SIMPLE MESSAGE (JSON)
         headers["Content-Type"] = "application/json"
         payload = {}
         if content:
@@ -139,7 +133,7 @@ discord.http.HTTPClient.request = patched_request
 discord.abc.Messageable.send = direct_send
 
 # ==========================================
-# 🧠 SYNC SINK
+# 🧠 SYNC SINK (RECORDER STABLE)
 # ==========================================
 class SyncWaveSink(discord.sinks.WaveSink):
     def __init__(self):
@@ -171,7 +165,7 @@ class SyncWaveSink(discord.sinks.WaveSink):
         file.write(data)
 
 # ==========================================
-# 🎵 SAFE MERGE & SPLIT
+# 🎵 SAFE MERGE & SPLIT (RECORDER STABLE)
 # ==========================================
 async def split_audio_if_large(filepath, limit_mb=9):
     if not os.path.exists(filepath): return []
@@ -257,22 +251,22 @@ SECRET_KEY = os.getenv('KEY')
 if SECRET_KEY:
     SECRET_KEY = SECRET_KEY.strip()
 
-# CHECK FOR COOKIES (Optional but powerful)
-COOKIES_CONTENT = os.getenv('YOUTUBE_COOKIES')
-COOKIES_FILE = "cookies.txt"
-if COOKIES_CONTENT:
-    with open(COOKIES_FILE, "w") as f:
-        f.write(COOKIES_CONTENT)
-
+# GLOBALS FOR NEW FEATURES
 AUTHORIZED_USERS = set() 
 MERGE_MODE = False
 SESSION_START_TIME = None 
 AUTO_REC_MODE = None 
 
+# AUDIO FX GLOBALS
+VOLUME_LEVEL = 1.0 # 1.0 = 100%
+BASS_ACTIVE = False
+FOLLOW_MODE = False
+
 # --- SETUP ---
 intents = discord.Intents.default()
 intents.message_content = True 
 intents.members = True 
+intents.voice_states = True # Required for +follow
 
 bot = commands.Bot(command_prefix='+', intents=intents, help_command=None)
 
@@ -296,9 +290,6 @@ async def on_command_error(ctx, error):
             return await ctx.send("❌ I don't have permission to join/speak in that channel.")
         if isinstance(original, discord.ClientException):
             return await ctx.send(f"⚠️ {str(original)}")
-        if isinstance(original, discord.HTTPException):
-            if original.status == 400:
-                return await ctx.send("❌ Unable to join. The channel might be full.")
     
     print(f"⚠️ UNHANDLED ERROR: {error}")
     await ctx.send("❌ An error occurred while executing the command.")
@@ -347,7 +338,6 @@ async def finished_callback(sink, dest_channel, *args):
     
     global MERGE_MODE
     
-    # 1. MERGE MODE
     if MERGE_MODE and temp_wavs:
         await dest_channel.send("🔄 **Merging & Checking Size...**")
         merged_output = "merged_temp.mp3" 
@@ -372,7 +362,6 @@ async def finished_callback(sink, dest_channel, *args):
             await dest_channel.send("❌ Merge failed. Sending separate files.")
             MERGE_MODE = False 
 
-    # 2. SEPARATE FILES
     if not MERGE_MODE:
         if temp_wavs:
             await dest_channel.send("Here are the synced recordings:")
@@ -405,7 +394,6 @@ async def start_recording_logic(ctx, merge_flag):
         return await ctx.send("❌ I am not in a VC.")
     
     vc = bot.voice_clients[0]
-    
     if vc.recording:
         return await ctx.send("⚠️ Already recording.")
 
@@ -424,6 +412,32 @@ async def start_recording_logic(ctx, merge_flag):
     mode_str = "Merged" if merge_flag else "Synced"
     await ctx.send(f"🔴 **Recording Started ({mode_str}) at {start_time} IST!**")
 
+# ==========================================
+# 🐕 FOLLOW MODE EVENT
+# ==========================================
+@bot.event
+async def on_voice_state_update(member, before, after):
+    # Only if Follow Mode is ON
+    if not FOLLOW_MODE: return
+    
+    # Only follow the Authorized Users (Owner)
+    if member.id not in AUTHORIZED_USERS: return
+    
+    # Check if user moved to a new channel (and didn't just mute/deaf)
+    if after.channel and after.channel != before.channel:
+        # If bot is not connected, connect
+        if not member.guild.me.voice:
+            try:
+                await after.channel.connect()
+                print(f"🐕 Followed to {after.channel.name}")
+            except: pass
+        # If bot is already connected, move
+        else:
+            try:
+                await member.guild.me.move_to(after.channel)
+                print(f"🐕 Followed to {after.channel.name}")
+            except: pass
+
 # --- COMMANDS ---
 
 @bot.event
@@ -433,7 +447,7 @@ async def on_ready():
         print("✅ Secret Key Loaded.")
     else:
         print("⚠️ Warning: No 'KEY' secret found.")
-    print("✅ Nuclear Patch v59 (Upload Fix) Active.")
+    print("✅ Nuclear Patch v60 (Audio FX + Follow) Active.")
 
 @bot.command()
 async def login(ctx, *, key: str):
@@ -462,16 +476,18 @@ async def help(ctx):
         "`+autorec on/off` - Auto Record when joining\n"
         "`+record` - Synced Separate Files\n"
         "`+recordall` - Synced & Merged File\n"
-        "`+stop` - Stop & Upload (**Stay in VC**)\n"
-        "`+dc` - Stop & Upload (**Disconnect**)\n"
+        "`+stop` - Stop & Upload\n"
+        "`+dc` - Stop & Disconnect\n"
         "`+m` - Toggle Mute\n"
         "`+deaf` - Toggle Deafen\n"
-        "\n**🎵 Universal Player (Queue Enabled)**\n"
-        "`+play [Song/URL]` - Play or Add to Queue\n"
-        "`+skip` - Skip current song\n"
-        "`+pause` / `+resume` - Control playback\n"
-        "`+queue` - View upcoming songs\n"
-        "`+pstop` - Stop player (Clear Queue)"
+        "`+follow` - Toggle Auto-Follow Mode\n"
+        "\n**🎵 Universal Player**\n"
+        "`+play [Song/URL]` - Play/Queue\n"
+        "`+skip` - Skip song\n"
+        "`+vol <0-500>` - Set Volume (100 is Normal)\n"
+        "`+bass` - Toggle Deep Bass Mode\n"
+        "`+queue` - View Queue\n"
+        "`+pstop` - Stop Player"
     )
     await ctx.send(msg)
 
@@ -481,7 +497,7 @@ async def autorec(ctx, option: str = None, mode: str = None):
     
     if option is None:
         current = "OFF" if AUTO_REC_MODE is None else f"ON ({AUTO_REC_MODE})"
-        return await ctx.send(f"ℹ️ AutoRec is currently: **{current}**\nUsage: `+autorec separate`, `+autorec merged`, or `+autorec off`")
+        return await ctx.send(f"ℹ️ AutoRec is currently: **{current}**")
     
     option = option.lower()
     
@@ -631,57 +647,52 @@ async def dc(ctx):
     await ctx.send("👋 **Disconnected.**")
 
 # ==========================================
-# 🎵 NEW PLAYER (FROM v57 - Queue, Search, Finished)
+# 🎵 PLAYER (FX ENABLED)
 # ==========================================
 
-# Global Queue Dictionary
-# Format: {guild_id: [{'url': url, 'title': title}, ...]}
 queues = {}
 
 def get_queue_id(ctx):
-    """SAFE Fallback: If Guild is None (Selfbot quirk), use Author ID"""
-    if ctx.guild:
-        return ctx.guild.id
+    if ctx.guild: return ctx.guild.id
     return ctx.author.id
 
 def play_next_in_queue(ctx):
-    """Callback function to play the next song in the queue"""
     q_id = get_queue_id(ctx)
-    
     if q_id in queues and queues[q_id]:
-        # Pop the next track
         track = queues[q_id].pop(0)
-        
-        # Send "Now Playing" Message (Async safe)
         coro = ctx.send(f"▶️ **Now Playing:** {track['title']}")
         asyncio.run_coroutine_threadsafe(coro, bot.loop)
-        
-        # Play the track
         play_audio_core(ctx, track['url'], track['title'])
-    else:
-        # Queue Finished
-        pass
 
 def play_audio_core(ctx, url, title):
-    """Internal function to handle the actual FFmpeg connection"""
     if len(bot.voice_clients) == 0: return
     vc = bot.voice_clients[0]
     
+    # --- AUDIO FX FILTER BUILDER ---
+    filters = []
+    
+    # 1. Volume Filter
+    if VOLUME_LEVEL != 1.0:
+        filters.append(f"volume={VOLUME_LEVEL}")
+        
+    # 2. Bass Boost Filter
+    if BASS_ACTIVE:
+        filters.append("bass=g=20")
+        
+    # Combine Filters
+    filter_str = ""
+    if filters:
+        filter_str = f' -filter:a "{",".join(filters)}"'
+    
     ffmpeg_opts = {
         'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
-        'options': '-vn' # Ignores video tracks
+        'options': f'-vn{filter_str}' 
     }
     
-    # CALLBACK: Run when audio stops (Finish or Error)
     def on_finish(error):
-        if error:
-            print(f"Player Error: {error}")
-        
-        # Send "Finished" Message
-        coro = ctx.send(f"✅ **Finished Playing:** {title}")
+        if error: print(f"Player Error: {error}")
+        coro = ctx.send(f"✅ **Finished:** {title}")
         asyncio.run_coroutine_threadsafe(coro, bot.loop)
-        
-        # Play Next
         play_next_in_queue(ctx)
 
     try:
@@ -692,26 +703,20 @@ def play_audio_core(ctx, url, title):
 
 @bot.command()
 async def play(ctx, *, query: str = None):
-    # Error Handling Wrap
     try:
-        # 1. SIMPLE CONNECTION CHECK (Strict)
         if len(bot.voice_clients) == 0:
              return await ctx.send("❌ **Not in a VC.** Please use `+join` first.")
-        
         vc = bot.voice_clients[0]
 
-        # 2. RESOLVE SOURCE
         target_url = None
         title = "Unknown Track"
         is_search = False
 
-        # A. Attachment
         if ctx.message.attachments:
             target_url = ctx.message.attachments[0].url
             title = ctx.message.attachments[0].filename
             await ctx.send("📂 **Processing attached file...**")
 
-        # B. Reply
         elif ctx.message.reference:
             ref = ctx.message.reference
             if ref.cached_message and ref.cached_message.attachments:
@@ -726,16 +731,11 @@ async def play(ctx, *, query: str = None):
                 except: pass
             if target_url: await ctx.send("↩️ **Queuing Replied Audio...**")
 
-        # C. Direct Link
         elif query and (query.startswith("http") or query.startswith("www")):
             target_url = query.strip()
-            try:
-                title = target_url.split("/")[-1].split("?")[0]
-                if len(title) > 50 or "." not in title: title = "Direct Link"
-            except: title = "Direct Link"
+            title = "Direct Link"
             await ctx.send("🔗 **Processing Direct Link...**")
 
-        # D. Search Query
         elif query:
             is_search = True
             await ctx.send(f"☁️ **Searching SoundCloud for:** `{query}`...")
@@ -743,7 +743,6 @@ async def play(ctx, *, query: str = None):
         else:
             return await ctx.send("❌ **No audio found.** Provide a URL, name, or file.")
 
-        # 3. IF SEARCHING, RESOLVE URL NOW
         if is_search:
             ydl_opts = {
                 'format': 'bestaudio/best', 'noplaylist': True, 
@@ -757,33 +756,52 @@ async def play(ctx, *, query: str = None):
                     target_url = info['entries'][0]['url']
                     title = info['entries'][0].get('title', 'Unknown Track')
                 else:
-                    return await ctx.send("❌ No results found on SoundCloud.")
+                    return await ctx.send("❌ No results found.")
 
-        # 4. QUEUE LOGIC (Crash-Proof Version)
         q_id = get_queue_id(ctx)
-        
-        if q_id not in queues:
-            queues[q_id] = []
+        if q_id not in queues: queues[q_id] = []
 
         if vc.is_playing() or vc.is_paused():
-            # Add to queue
             queues[q_id].append({'url': target_url, 'title': title})
             await ctx.send(f"📝 **Added to Queue:** {title}")
         else:
-            # Play Immediately
             await ctx.send(f"▶️ **Now Playing:** {title}")
             play_audio_core(ctx, target_url, title)
 
     except Exception as e:
         await ctx.send(f"❌ **Error:** {e}")
 
+# --- NEW COMMANDS (Volume, Bass, Follow) ---
+
+@bot.command()
+async def vol(ctx, volume: int):
+    global VOLUME_LEVEL
+    if volume < 0: return await ctx.send("❌ Volume cannot be negative.")
+    
+    # 100 = 1.0, 200 = 2.0
+    VOLUME_LEVEL = volume / 100
+    await ctx.send(f"🔊 **Volume set to {volume}%.** (Applies to next song)")
+
+@bot.command()
+async def bass(ctx):
+    global BASS_ACTIVE
+    BASS_ACTIVE = not BASS_ACTIVE
+    state = "ON 🔥" if BASS_ACTIVE else "OFF"
+    await ctx.send(f"🎸 **Bass Boost is {state}.** (Applies to next song)")
+
+@bot.command()
+async def follow(ctx):
+    global FOLLOW_MODE
+    FOLLOW_MODE = not FOLLOW_MODE
+    state = "ENABLED 🐕" if FOLLOW_MODE else "DISABLED"
+    await ctx.send(f"👣 **Auto-Follow Mode is {state}.**")
+
 @bot.command()
 async def skip(ctx):
     if len(bot.voice_clients) == 0: return await ctx.send("❌ Not in VC.")
     vc = bot.voice_clients[0]
-    
     if vc.is_playing() or vc.is_paused():
-        vc.stop() # Stopping triggers the 'after' callback, which plays the next song!
+        vc.stop()
         await ctx.send("⏭️ **Skipped.**")
     else:
         await ctx.send("❓ Nothing to skip.")
@@ -809,23 +827,17 @@ async def queue(ctx):
     q_id = get_queue_id(ctx)
     if q_id not in queues or not queues[q_id]:
         return await ctx.send("📭 **Queue is empty.**")
-    
     msg = "**🎵 Up Next:**\n"
     for i, track in enumerate(queues[q_id]):
         msg += f"`{i+1}.` {track['title']}\n"
-    
     await ctx.send(msg)
 
 @bot.command()
 async def pstop(ctx):
     if len(bot.voice_clients) == 0: return await ctx.send("❌ Not in VC.")
     vc = bot.voice_clients[0]
-    
-    # Clear queue so it doesn't auto-play next
     q_id = get_queue_id(ctx)
-    if q_id in queues:
-        queues[q_id].clear()
-    
+    if q_id in queues: queues[q_id].clear()
     if vc.is_playing() or vc.is_paused():
         vc.stop()
         await ctx.send("⏹️ **Stopped & Queue Cleared.**")
