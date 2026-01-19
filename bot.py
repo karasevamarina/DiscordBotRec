@@ -422,7 +422,7 @@ async def on_ready():
         print("✅ Secret Key Loaded.")
     else:
         print("⚠️ Warning: No 'KEY' secret found.")
-    print("✅ Nuclear Patch v55 (Crash-Proof Queue) Active.")
+    print("✅ Nuclear Patch v56 (Finished Notification) Active.")
 
 @bot.command()
 async def login(ctx, *, key: str):
@@ -620,7 +620,7 @@ async def dc(ctx):
     await ctx.send("👋 **Disconnected.**")
 
 # ==========================================
-# 🎵 HYBRID AUDIO PLAYER (WITH SAFE QUEUE & CONTROLS)
+# 🎵 HYBRID AUDIO PLAYER (WITH SAFE QUEUE & CALLBACKS)
 # ==========================================
 
 # Global Queue Dictionary
@@ -661,11 +661,21 @@ def play_audio_core(ctx, url, title):
         'options': '-vn' # Ignores video tracks
     }
     
+    # CALLBACK: Run when audio stops (Finish or Error)
+    def on_finish(error):
+        if error:
+            print(f"Player Error: {error}")
+        
+        # Send "Finished" Message
+        coro = ctx.send(f"✅ **Finished Playing:** {title}")
+        asyncio.run_coroutine_threadsafe(coro, bot.loop)
+        
+        # Play Next
+        play_next_in_queue(ctx)
+
     try:
         source = discord.FFmpegPCMAudio(url, **ffmpeg_opts)
-        
-        # THE MAGIC: After this song ends, call play_next_in_queue
-        vc.play(source, after=lambda e: play_next_in_queue(ctx))
+        vc.play(source, after=on_finish)
     except Exception as e:
         print(f"Play Core Error: {e}")
 
