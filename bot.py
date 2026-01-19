@@ -11,9 +11,10 @@ import aiohttp
 import subprocess 
 import time
 import io
+import math
 
 # ==========================================
-# ☢️ THE "NUCLEAR" PATCH v23 (Secure Login Fix)
+# ☢️ THE "NUCLEAR" PATCH v25 (Limit Bypass Fix)
 # ==========================================
 
 # 1. Login Patch
@@ -159,8 +160,44 @@ class SyncWaveSink(discord.sinks.WaveSink):
         file.write(data)
 
 # ==========================================
-# 🎵 SAFE MERGE
+# 🎵 SAFE MERGE & SPLIT
 # ==========================================
+async def split_audio_if_large(filepath, limit_mb=9):
+    if not os.path.exists(filepath): return []
+    
+    file_size_mb = os.path.getsize(filepath) / (1024 * 1024)
+    if file_size_mb <= limit_mb:
+        return [filepath]
+
+    chunk_duration = 500 
+    
+    base_name = filepath.rsplit('.', 1)[0]
+    ext = filepath.rsplit('.', 1)[1]
+    output_pattern = f"{base_name}_part%03d.{ext}"
+    
+    cmd = [
+        'ffmpeg', '-y', '-i', filepath,
+        '-f', 'segment', 
+        '-segment_time', str(chunk_duration), 
+        '-c', 'copy', 
+        output_pattern
+    ]
+    
+    process = await asyncio.create_subprocess_exec(*cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    await process.communicate()
+    
+    parts = []
+    i = 0
+    while True:
+        part_name = f"{base_name}_part{i:03d}.{ext}"
+        if os.path.exists(part_name):
+            parts.append(part_name)
+            i += 1
+        else:
+            break
+            
+    return parts
+
 async def convert_and_merge(file_list, output_filename, duration):
     if not file_list: return None
     
@@ -206,10 +243,9 @@ async def convert_wav_to_mp3_padded(wav_filename, mp3_filename, duration):
 # --- CONFIGURATION ---
 TOKEN = os.getenv('DISCORD_TOKEN')
 
-# FIX: Securely load KEY from environment and clean it
-SECRET_KEY = os.getenv('KEY')
-if SECRET_KEY:
-    SECRET_KEY = SECRET_KEY.strip()
+# HARDCODE YOUR KEY HERE
+SECRET_KEY = "SuperKaBot" 
+if SECRET_KEY: SECRET_KEY = SECRET_KEY.strip()
 
 AUTHORIZED_USERS = set() 
 MERGE_MODE = False
@@ -225,24 +261,16 @@ bot = commands.Bot(command_prefix='+', intents=intents, help_command=None)
 # --- 🔒 THE GATEKEEPER ---
 @bot.check
 async def global_login_check(ctx):
-    # Allow login command always
-    if ctx.command.name == 'login':
-        return True
-    
-    if ctx.author.id in AUTHORIZED_USERS:
-        return True
-    else:
-        # Warn user
-        await ctx.send("❌ **Access Denied.** Please use `+login <key>` first.")
-        return False
+    if ctx.command.name == 'login': return True
+    if ctx.author.id in AUTHORIZED_USERS: return True
+    await ctx.send("❌ **Access Denied.** Please use `+login <key>` first.")
+    return False
 
 # Silent Error Handler
 @bot.event
 async def on_command_error(ctx, error):
-    if isinstance(error, commands.CheckFailure):
-        return
-    if isinstance(error, commands.CommandNotFound):
-        return
+    if isinstance(error, commands.CheckFailure): return
+    if isinstance(error, commands.CommandNotFound): return
     print(f"Command Error: {error}")
 
 # --- HELPER FUNCTIONS ---
@@ -257,7 +285,6 @@ async def finished_callback(sink, dest_channel, *args):
     
     temp_wavs = [] 
     real_names = [] 
-    final_files = []
     
     ist = pytz.timezone('Asia/Kolkata')
     now = datetime.datetime.now(ist)
@@ -289,48 +316,69 @@ async def finished_callback(sink, dest_channel, *args):
     
     global MERGE_MODE
     
+    # 1. MERGE MODE PROCESSING
     if MERGE_MODE and temp_wavs:
-        await dest_channel.send("🔄 **Merging & Padding...**")
+        await dest_channel.send("🔄 **Merging & Checking Size...**")
         merged_output = "merged_temp.mp3" 
         final_nice_name = f"Conversation_{time_str}.mp3" 
         
         result = await convert_and_merge(temp_wavs, merged_output, total_duration)
         
         if result and os.path.exists(result) and os.path.getsize(result) > 0:
-            await dest_channel.send("Here is the full conversation:", 
-                                  file=discord.File(result, filename=final_nice_name))
-            os.remove(result)
+            chunks = await split_audio_if_large(result)
+            if len(chunks) > 1:
+                await dest_channel.send(f"📦 File > 9MB. Sending {len(chunks)} parts:")
+                for idx, chunk in enumerate(chunks):
+                    chunk_nice_name = f"Conversation_{time_str}_Part{idx+1}.mp3"
+                    await dest_channel.send(f"**Part {idx+1}:**", file=discord.File(chunk, filename=chunk_nice_name))
+                    os.remove(chunk)
+                os.remove(result)
+            else:
+                await dest_channel.send("Here is the full conversation:", 
+                                      file=discord.File(result, filename=final_nice_name))
+                os.remove(result)
         else:
-            await dest_channel.send("❌ Merge failed (Empty or Error). Sending separate files.")
+            await dest_channel.send("❌ Merge failed. Sending separate files.")
             MERGE_MODE = False 
 
+    # 2. SEPARATE FILES PROCESSING (Sequential Uploads)
     if not MERGE_MODE:
+        if temp_wavs:
+            await dest_channel.send("Here are the synced recordings:")
+
         for idx, wav in enumerate(temp_wavs):
             mp3_name = real_names[idx] 
             await convert_wav_to_mp3_padded(wav, mp3_name, total_duration)
+            
             if os.path.exists(mp3_name):
-                final_files.append(discord.File(mp3_name))
-        
-        if final_files:
-            await dest_channel.send("Here are the synced recordings:", files=final_files)
-        else:
-            await dest_channel.send("No audio recorded.")
+                # Check if this specific file needs splitting
+                chunks = await split_audio_if_large(mp3_name)
+                
+                if len(chunks) > 1:
+                     for c_idx, chunk in enumerate(chunks):
+                        # SEND INDIVIDUALLY TO BYPASS TOTAL LIMIT
+                        await dest_channel.send(
+                            f"**{mp3_name[:-4]} (Part {c_idx+1}):**",
+                            file=discord.File(chunk, filename=f"{mp3_name[:-4]}_Part{c_idx+1}.mp3")
+                        )
+                        os.remove(chunk)
+                else:
+                    # SEND INDIVIDUALLY TO BYPASS TOTAL LIMIT
+                    await dest_channel.send(file=discord.File(mp3_name))
+                
+                # Cleanup Original MP3
+                if os.path.exists(mp3_name): os.remove(mp3_name)
 
+    # Cleanup WAVs
     for f in temp_wavs:
         if os.path.exists(f): os.remove(f)
-    for f in final_files:
-        if os.path.exists(f.filename): os.remove(f.filename)
 
 # --- COMMANDS ---
 
 @bot.event
 async def on_ready():
     print(f'Logged in as "{bot.user.name}"')
-    if SECRET_KEY:
-        print(f"✅ Secret Key Loaded (Secure Mode). Key Length: {len(SECRET_KEY)}")
-    else:
-        print("⚠️ FATAL: KEY is missing. Check your YAML file.")
-    print("✅ Nuclear Patch v23 (Secure Login) Active.")
+    print("✅ Nuclear Patch v25 (Limit Bypass Fix) Active.")
 
 @bot.command()
 async def login(ctx, *, key: str):
@@ -340,9 +388,8 @@ async def login(ctx, *, key: str):
     if ctx.author.id in AUTHORIZED_USERS:
         return await ctx.send("✅ You are already logged in.")
 
-    # DIAGNOSTIC
     if not SECRET_KEY:
-        return await ctx.send("⚠️ **System Error:** Bot cannot see the Secret Key! Check your Workflow YAML.")
+        return await ctx.send("⚠️ **System Error:** Key Missing!")
 
     if key.strip() == SECRET_KEY:
         AUTHORIZED_USERS.add(ctx.author.id)
@@ -356,10 +403,9 @@ async def help(ctx):
         "**🎙️ User Recorder**\n"
         "`+login <key>` - Unlock the bot\n"
         "`+join` - Find you and join VC\n"
-        "`+joinid <id>` - Join specific Channel ID\n"
-        "`+record` - Synced Separate Files\n"
-        "`+recordall` - Synced & Merged File\n"
-        "`+stop` - Stop & Upload\n"
+        "`+record` / `+recordall` - Start Recording\n"
+        "`+stop` - Stop & Upload (**Stay in VC**)\n"
+        "`+dc` - Stop & Upload (**Disconnect**)\n"
         "`+name <text>` - Change Display Name"
     )
     await ctx.send(msg)
@@ -459,11 +505,26 @@ async def stop(ctx):
     if len(bot.voice_clients) == 0:
         return await ctx.send("Not connected.")
     vc = bot.voice_clients[0]
+    
     if vc.recording:
         vc.stop_recording()
-        await ctx.send("🛑 Processing...")
-    await asyncio.sleep(1)
+        await ctx.send("💾 **Saving & Uploading... (Bot will stay in VC)**")
+    else:
+        await ctx.send("❓ Not recording.")
+
+@bot.command()
+async def dc(ctx):
+    if len(bot.voice_clients) == 0:
+        return await ctx.send("Not connected.")
+    vc = bot.voice_clients[0]
+    
+    if vc.recording:
+        vc.stop_recording()
+        await ctx.send("💾 **Saving & Uploading before Disconnect...**")
+    
+    await asyncio.sleep(1) # Give it a second to initiate stop
     await vc.disconnect()
+    await ctx.send("👋 **Disconnected.**")
 
 if __name__ == "__main__":
     if not TOKEN:
