@@ -14,7 +14,7 @@ import io
 import math
 
 # ==========================================
-# ☢️ THE "NUCLEAR" PATCH v30 (Unhidden Logs & Forced Voice State)
+# ☢️ THE "NUCLEAR" PATCH v31 (Robust Mute/Deaf Fix)
 # ==========================================
 
 # 1. Login Patch (USER BOT MODE)
@@ -265,15 +265,12 @@ async def global_login_check(ctx):
     await ctx.send("❌ **Access Denied.** Please use `+login <key>` first.")
     return False
 
-# FIX: Un-hide Logs so we can see why +m fails
+# Silent Error Handler (Except for real errors)
 @bot.event
 async def on_command_error(ctx, error):
-    # Only ignore login check failures
     if isinstance(error, commands.CheckFailure): return
     if isinstance(error, commands.CommandNotFound): return
-    
-    # PRINT EVERYTHING ELSE
-    print(f"⚠️ COMMAND ERROR: {error}")
+    print(f"Command Error: {error}")
     await ctx.send(f"⚠️ Error: {error}")
 
 # --- HELPER FUNCTIONS ---
@@ -320,7 +317,6 @@ async def finished_callback(sink, dest_channel, *args):
     
     global MERGE_MODE
     
-    # 1. MERGE MODE
     if MERGE_MODE and temp_wavs:
         await dest_channel.send("🔄 **Merging & Checking Size...**")
         merged_output = "merged_temp.mp3" 
@@ -345,7 +341,6 @@ async def finished_callback(sink, dest_channel, *args):
             await dest_channel.send("❌ Merge failed. Sending separate files.")
             MERGE_MODE = False 
 
-    # 2. SEPARATE FILES
     if not MERGE_MODE:
         if temp_wavs:
             await dest_channel.send("Here are the synced recordings:")
@@ -381,7 +376,7 @@ async def on_ready():
         print("✅ Secret Key Loaded.")
     else:
         print("⚠️ Warning: No 'KEY' secret found.")
-    print("✅ Nuclear Patch v30 (Unmasked Logs) Active.")
+    print("✅ Nuclear Patch v31 (Robust Mute/Deaf) Active.")
 
 @bot.command()
 async def login(ctx, *, key: str):
@@ -416,7 +411,7 @@ async def help(ctx):
     )
     await ctx.send(msg)
 
-# --- NEW SELF-BOT VOICE COMMANDS (FORCED UPDATE) ---
+# --- NEW ROBUST MUTE/DEAF COMMANDS ---
 
 @bot.command()
 async def m(ctx):
@@ -424,19 +419,28 @@ async def m(ctx):
         return await ctx.send("❌ Not in a VC.")
     
     vc = bot.voice_clients[0]
-    me = ctx.guild.me
     
-    # Force toggle based on what we see, or default to True if cache is broken
-    if me.voice:
-        new_mute = not me.voice.self_mute
-        current_deaf = me.voice.self_deaf
-    else:
-        # Cache lag fallback
+    # 1. Try to get current state safely
+    try:
+        current_mute = vc.guild.me.voice.self_mute
+        current_deaf = vc.guild.me.voice.self_deaf
+        new_mute = not current_mute
+    except:
+        # Fallback if cache is broken
         new_mute = True
         current_deaf = False
     
-    # We use change_voice_state, which handles Opcode 4 internally for self-bots
-    await ctx.guild.change_voice_state(channel=vc.channel, self_mute=new_mute, self_deaf=current_deaf)
+    # 2. Use Channel/Guild ID directly from VoiceClient (More reliable than ctx)
+    payload = {
+        "op": 4,
+        "d": {
+            "guild_id": vc.channel.guild.id,
+            "channel_id": vc.channel.id,
+            "self_mute": new_mute,
+            "self_deaf": current_deaf
+        }
+    }
+    await bot.ws.send_as_json(payload)
     
     status = "🔇 **Muted**" if new_mute else "🎙️ **Unmuted**"
     await ctx.send(f"✅ Mic is now {status}.")
@@ -447,16 +451,28 @@ async def deaf(ctx):
         return await ctx.send("❌ Not in a VC.")
     
     vc = bot.voice_clients[0]
-    me = ctx.guild.me
     
-    if me.voice:
-        new_deaf = not me.voice.self_deaf
-        current_mute = me.voice.self_mute
-    else:
+    # 1. Try to get current state safely
+    try:
+        current_mute = vc.guild.me.voice.self_mute
+        current_deaf = vc.guild.me.voice.self_deaf
+        new_deaf = not current_deaf
+    except:
+        # Fallback
         new_deaf = True
         current_mute = False
     
-    await ctx.guild.change_voice_state(channel=vc.channel, self_deaf=new_deaf, self_mute=current_mute)
+    # 2. Use Channel/Guild ID directly
+    payload = {
+        "op": 4,
+        "d": {
+            "guild_id": vc.channel.guild.id,
+            "channel_id": vc.channel.id,
+            "self_mute": current_mute,
+            "self_deaf": new_deaf
+        }
+    }
+    await bot.ws.send_as_json(payload)
     
     status = "🔕 **Deafened**" if new_deaf else "🔔 **Undeafened**"
     await ctx.send(f"✅ Headset is now {status}.")
