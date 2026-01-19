@@ -414,7 +414,7 @@ async def on_ready():
         print("✅ Secret Key Loaded.")
     else:
         print("⚠️ Warning: No 'KEY' secret found.")
-    print("✅ Nuclear Patch v40 (YouTube Spoof) Active.")
+    print("✅ Nuclear Patch v41 (YouTube iOS Bypass) Active.")
 
 @bot.command()
 async def login(ctx, *, key: str):
@@ -649,7 +649,7 @@ async def play(ctx, *, direct_url: str = None):
 
         if is_youtube:
             await ctx.send("🔍 **Processing YouTube Link...**")
-            # NUCLEAR FIX: SPOOF ANDROID CLIENT
+            # NUCLEAR FIX v41: USE iOS CLIENT TO BYPASS DATA CENTER BLOCK
             ydl_opts = {
                 'format': 'bestaudio/best',
                 'noplaylist': True,
@@ -657,7 +657,7 @@ async def play(ctx, *, direct_url: str = None):
                 'nocheckcertificate': True,
                 'extractor_args': {
                     'youtube': {
-                        'player_client': ['android', 'web'] # Spoof Android to bypass Login
+                        'player_client': ['ios', 'web_creator'] # iOS + Web Creator often bypass login
                     }
                 },
                 'postprocessors': [{
@@ -676,7 +676,6 @@ async def play(ctx, *, direct_url: str = None):
         await ctx.send("▶️ **Playing Audio...**")
         
     except Exception as e:
-        # Check for the specific "Sign in" error
         err_msg = str(e)
         if "Sign in to confirm" in err_msg:
             await ctx.send("❌ **YouTube Error:** Google has blocked this server IP. Please use a direct file link instead.")
