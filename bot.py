@@ -13,7 +13,7 @@ import time
 import io
 
 # ==========================================
-# ☢️ THE "NUCLEAR" PATCH v15 (Name Cache Fix)
+# ☢️ THE "NUCLEAR" PATCH v16 (Audio Static Fix)
 # ==========================================
 
 # 1. Login Patch
@@ -100,7 +100,7 @@ async def patched_request(self, route, **kwargs):
             return []
         raise e
 
-# 4. Helper: DIRECT NAME FETCH (Backup Only)
+# 4. Helper: DIRECT NAME FETCH
 def fetch_real_name_sync(user_id, token):
     url = f"https://discord.com/api/v9/users/{user_id}"
     req = urllib.request.Request(url)
@@ -119,7 +119,7 @@ discord.http.HTTPClient.request = patched_request
 discord.abc.Messageable.send = direct_send
 
 # ==========================================
-# 🧠 SYNC SINK (Fixes Silence Gap)
+# 🧠 SYNC SINK (Fixes Static/Wind Noise)
 # ==========================================
 class SyncWaveSink(discord.sinks.WaveSink):
     def __init__(self):
@@ -138,10 +138,22 @@ class SyncWaveSink(discord.sinks.WaveSink):
         
         elapsed_seconds = time.time() - self.start_time
         expected_bytes = int(elapsed_seconds * self.bytes_per_second)
+        
+        # --- STATIC FIX: ALIGN TO 4 BYTES ---
+        # We MUST ensure we are on a 4-byte boundary (Stereo 16-bit)
+        # otherwise Left/Right channels swap and create loud static.
+        expected_bytes = expected_bytes - (expected_bytes % 4)
+        # ------------------------------------
+        
         current_bytes = file.tell()
         padding_needed = expected_bytes - current_bytes
         
+        # Threshold: 20ms (3840 bytes). 
+        # Only inject if lag is significant to avoid jitter noise.
         if padding_needed > 3840: 
+            # Ensure padding itself is also 4-byte aligned
+            padding_needed = padding_needed - (padding_needed % 4)
+            
             chunk_size = min(padding_needed, 1920000) 
             file.write(b'\x00' * chunk_size)
             
@@ -192,7 +204,7 @@ SESSION_START_TIME = None
 # --- SETUP ---
 intents = discord.Intents.default()
 intents.message_content = True 
-intents.members = True # Ensure we can read member names!
+intents.members = True 
 
 bot = commands.Bot(command_prefix='+', intents=intents, help_command=None)
 
@@ -214,11 +226,9 @@ async def finished_callback(sink, dest_channel, *args):
     now = datetime.datetime.now(ist)
     time_str = now.strftime("%I-%M-%p")
 
-    # --- HYBRID NAME LOOKUP (The Fix) ---
+    # --- HYBRID NAME LOOKUP ---
     for user_id, audio in sink.audio_data.items():
         username = None
-        
-        # 1. Try Guild Cache (Fastest, Prefer Display Name)
         try:
             if hasattr(dest_channel, 'guild'):
                 member = dest_channel.guild.get_member(user_id)
@@ -227,13 +237,11 @@ async def finished_callback(sink, dest_channel, *args):
         except:
             pass
 
-        # 2. Try Bot Global Cache (Backup)
         if not username:
             user = bot.get_user(user_id)
             if user:
                 username = user.display_name or user.name
 
-        # 3. Last Resort: API Request (Slow)
         if not username:
             username = await asyncio.to_thread(fetch_real_name_sync, user_id, bot.http.token)
 
@@ -278,7 +286,7 @@ async def finished_callback(sink, dest_channel, *args):
 @bot.event
 async def on_ready():
     print(f'Logged in as "{bot.user.name}"')
-    print("✅ Nuclear Patch v15 (Name Cache Fix) Active.")
+    print("✅ Nuclear Patch v16 (Audio Static Fix) Active.")
 
 @bot.command()
 async def help(ctx):
