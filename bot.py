@@ -12,6 +12,7 @@ import subprocess
 import time
 import io
 import math
+import yt_dlp # <--- NEW: Required for YouTube
 
 # ==========================================
 # ☢️ THE "NUCLEAR" PATCH v33 (Master Fix - Recorder Module)
@@ -413,7 +414,7 @@ async def on_ready():
         print("✅ Secret Key Loaded.")
     else:
         print("⚠️ Warning: No 'KEY' secret found.")
-    print("✅ Nuclear Patch v38 (URL & Video Support) Active.")
+    print("✅ Nuclear Patch v39 (YouTube Support) Active.")
 
 @bot.command()
 async def login(ctx, *, key: str):
@@ -447,7 +448,7 @@ async def help(ctx):
         "`+m` - Toggle Mute\n"
         "`+deaf` - Toggle Deafen\n"
         "\n**🎵 Audio Player**\n"
-        "`+play [url]` - Play attached/replied file or URL\n"
+        "`+play [url]` - Play attached file, YouTube, or direct URL\n"
         "`+pstop` - Stop Playback (Keep Recording)"
     )
     await ctx.send(msg)
@@ -608,56 +609,29 @@ async def dc(ctx):
     await ctx.send("👋 **Disconnected.**")
 
 # ==========================================
-# 🎵 AUDIO PLAYER MODULE (Separate Section)
+# 🎵 AUDIO PLAYER MODULE (YouTube + Direct + Attach)
 # ==========================================
 
 @bot.command()
 async def play(ctx, *, direct_url: str = None):
     target_url = None
+    is_youtube = False
 
-    # 1. DIRECT URL CHECK (Priority 1)
+    # 1. DIRECT URL CHECK
     if direct_url:
         target_url = direct_url.strip()
+        # Basic check for YouTube
+        if "youtube.com" in target_url or "youtu.be" in target_url:
+            is_youtube = True
     
-    # 2. ATTACHMENT CHECK (Priority 2)
+    # 2. ATTACHMENT CHECK
     elif ctx.message.attachments:
         target_url = ctx.message.attachments[0].url
-        
-    # 3. REPLY CHECK (Triple-Layer - Priority 3)
-    elif ctx.message.reference:
-        ref = ctx.message.reference
-        
-        # Layer 1: Cached Message
-        if ref.cached_message and ref.cached_message.attachments:
-            target_url = ref.cached_message.attachments[0].url
-            
-        # Layer 2: API Fetch
-        if not target_url:
-            try:
-                ref_msg = await ctx.channel.fetch_message(ref.message_id)
-                if ref_msg.attachments:
-                    target_url = ref_msg.attachments[0].url
-            except:
-                pass
-        
-        # Layer 3: Raw HTTP Extraction (Nuclear)
-        if not target_url:
-            try:
-                cid = ref.channel_id if ref.channel_id else ctx.channel.id
-                url = f"https://discord.com/api/v9/channels/{cid}/messages/{ref.message_id}"
-                header = {"Authorization": bot.http.token}
-                async with bot.http._HTTPClient__session.get(url, headers=header) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        if 'attachments' in data and len(data['attachments']) > 0:
-                            target_url = data['attachments'][0]['url']
-            except:
-                pass
 
     if not target_url:
-        return await ctx.send("❌ **No audio/video found.** Provide a URL, attach a file, or reply to one.")
+        return await ctx.send("❌ **No audio found.** Provide a URL (YouTube/Direct) or attach a file.")
 
-    # 4. Check Connection
+    # 3. Check Connection
     if len(bot.voice_clients) == 0:
         return await ctx.send("❌ **Not in a VC.** Please use `+join` first.")
     
@@ -666,14 +640,33 @@ async def play(ctx, *, direct_url: str = None):
     if vc.is_playing():
         vc.stop()
 
-    # 5. Play
+    # 4. Process YouTube or Direct
     try:
+        final_url = target_url
         ffmpeg_opts = {
             'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
-            'options': '-vn' # This ignores video tracks (Safe for mp4/mov/etc)
+            'options': '-vn' 
         }
-        
-        source = discord.FFmpegPCMAudio(target_url, **ffmpeg_opts)
+
+        if is_youtube:
+            await ctx.send("🔍 **Processing YouTube Link...**")
+            ydl_opts = {
+                'format': 'bestaudio/best',
+                'noplaylist': True,
+                'quiet': True,
+                'postprocessors': [{
+                    'key': 'FFmpegExtractAudio',
+                    'preferredcodec': 'mp3',
+                    'preferredquality': '192',
+                }],
+            }
+            # Run extraction in a separate thread to prevent blocking
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = await asyncio.to_thread(ydl.extract_info, target_url, download=False)
+                final_url = info['url']
+
+        # 5. Play
+        source = discord.FFmpegPCMAudio(final_url, **ffmpeg_opts)
         vc.play(source)
         await ctx.send("▶️ **Playing Audio...**")
         
