@@ -14,7 +14,7 @@ import io
 import math
 
 # ==========================================
-# ☢️ THE "NUCLEAR" PATCH v31 (Robust Mute/Deaf Fix)
+# ☢️ THE "NUCLEAR" PATCH v32 (Auto-Rec & Friendly Errors)
 # ==========================================
 
 # 1. Login Patch (USER BOT MODE)
@@ -250,6 +250,9 @@ AUTHORIZED_USERS = set()
 MERGE_MODE = False
 SESSION_START_TIME = None 
 
+# NEW: Auto-Rec Variable (None, 'separate', 'merged')
+AUTO_REC_MODE = None 
+
 # --- SETUP ---
 intents = discord.Intents.default()
 intents.message_content = True 
@@ -265,13 +268,36 @@ async def global_login_check(ctx):
     await ctx.send("❌ **Access Denied.** Please use `+login <key>` first.")
     return False
 
-# Silent Error Handler (Except for real errors)
+# --- 😊 FRIENDLY ERROR HANDLER ---
 @bot.event
 async def on_command_error(ctx, error):
+    # Ignore CheckFailures (The Gatekeeper handles sending the message)
     if isinstance(error, commands.CheckFailure): return
     if isinstance(error, commands.CommandNotFound): return
-    print(f"Command Error: {error}")
-    await ctx.send(f"⚠️ Error: {error}")
+    
+    # Catch specific errors to make them friendly
+    if isinstance(error, commands.CommandInvokeError):
+        # Unwrap the error
+        original = error.original
+        
+        # 1. Permission Error
+        if isinstance(original, discord.Forbidden):
+            return await ctx.send("❌ I don't have permission to join/speak in that channel.")
+            
+        # 2. Already Connected / Recording Error
+        if isinstance(original, discord.ClientException):
+            # This handles "Already connected" or "Already recording"
+            # We assume the user sees the bot is working, so we can be silent or brief.
+            return await ctx.send(f"⚠️ {str(original)}")
+            
+        # 3. HTTP Error (Like Channel Full)
+        if isinstance(original, discord.HTTPException):
+            if original.status == 400: # Often means full channel for user bots
+                return await ctx.send("❌ Unable to join. The channel might be full.")
+    
+    # Generic catch-all for other errors (Print to console, Clean msg to user)
+    print(f"⚠️ UNHANDLED ERROR: {error}")
+    await ctx.send("❌ An error occurred while executing the command.")
 
 # --- HELPER FUNCTIONS ---
 async def finished_callback(sink, dest_channel, *args):
@@ -285,7 +311,6 @@ async def finished_callback(sink, dest_channel, *args):
     
     temp_wavs = [] 
     real_names = [] 
-    final_files = []
     
     ist = pytz.timezone('Asia/Kolkata')
     now = datetime.datetime.now(ist)
@@ -367,6 +392,30 @@ async def finished_callback(sink, dest_channel, *args):
     for f in temp_wavs:
         if os.path.exists(f): os.remove(f)
 
+# --- REUSABLE RECORDING FUNCTION (For AutoRec) ---
+async def start_recording_logic(ctx, merge_flag):
+    vc = ctx.guild.voice_client
+    if not vc:
+        return await ctx.send("❌ I am not in a VC.")
+    
+    if vc.recording:
+        return await ctx.send("⚠️ Already recording.")
+
+    global MERGE_MODE, SESSION_START_TIME
+    MERGE_MODE = merge_flag
+    SESSION_START_TIME = datetime.datetime.now() 
+
+    vc.start_recording(
+        SyncWaveSink(), 
+        finished_callback, 
+        ctx.channel 
+    )
+    
+    ist = pytz.timezone('Asia/Kolkata')
+    start_time = datetime.datetime.now(ist).strftime("%I:%M %p")
+    mode_str = "Merged" if merge_flag else "Synced"
+    await ctx.send(f"🔴 **Recording Started ({mode_str}) at {start_time} IST!**")
+
 # --- COMMANDS ---
 
 @bot.event
@@ -376,7 +425,7 @@ async def on_ready():
         print("✅ Secret Key Loaded.")
     else:
         print("⚠️ Warning: No 'KEY' secret found.")
-    print("✅ Nuclear Patch v31 (Robust Mute/Deaf) Active.")
+    print("✅ Nuclear Patch v32 (AutoRec & Friendly Errors) Active.")
 
 @bot.command()
 async def login(ctx, *, key: str):
@@ -402,6 +451,7 @@ async def help(ctx):
         "`+login <key>` - Unlock the bot\n"
         "`+join` - Find you and join VC\n"
         "`+joinid <id>` - Join specific Channel ID\n"
+        "`+autorec on/off` - Auto Record when joining\n"
         "`+record` - Synced Separate Files\n"
         "`+recordall` - Synced & Merged File\n"
         "`+stop` - Stop & Upload (**Stay in VC**)\n"
@@ -411,26 +461,53 @@ async def help(ctx):
     )
     await ctx.send(msg)
 
-# --- NEW ROBUST MUTE/DEAF COMMANDS ---
+# --- AUTO REC COMMAND ---
+@bot.command()
+async def autorec(ctx, option: str = None, mode: str = None):
+    global AUTO_REC_MODE
+    
+    if option is None:
+        current = "OFF" if AUTO_REC_MODE is None else f"ON ({AUTO_REC_MODE})"
+        return await ctx.send(f"ℹ️ AutoRec is currently: **{current}**\nUsage: `+autorec separate`, `+autorec merged`, or `+autorec off`")
+    
+    option = option.lower()
+    
+    if option == "off":
+        AUTO_REC_MODE = None
+        await ctx.send("✅ Auto-Record disabled.")
+        return
 
+    # Handle "+autorec on" -> ask for mode
+    if option == "on":
+        if mode:
+            option = mode.lower() # Handle "+autorec on merged"
+        else:
+            return await ctx.send("⚠️ Please specify mode: `+autorec separate` or `+autorec merged`")
+
+    if option in ["separate", "normal"]:
+        AUTO_REC_MODE = 'separate'
+        await ctx.send("✅ Auto-Record set to: **Separate Files**")
+    elif option in ["merged", "all"]:
+        AUTO_REC_MODE = 'merged'
+        await ctx.send("✅ Auto-Record set to: **Merged File**")
+    else:
+        await ctx.send("❌ Invalid mode. Use `separate`, `merged`, or `off`.")
+
+# --- MUTE/DEAF (Robust) ---
 @bot.command()
 async def m(ctx):
     if len(bot.voice_clients) == 0:
         return await ctx.send("❌ Not in a VC.")
-    
     vc = bot.voice_clients[0]
     
-    # 1. Try to get current state safely
     try:
         current_mute = vc.guild.me.voice.self_mute
         current_deaf = vc.guild.me.voice.self_deaf
         new_mute = not current_mute
     except:
-        # Fallback if cache is broken
         new_mute = True
         current_deaf = False
     
-    # 2. Use Channel/Guild ID directly from VoiceClient (More reliable than ctx)
     payload = {
         "op": 4,
         "d": {
@@ -441,7 +518,6 @@ async def m(ctx):
         }
     }
     await bot.ws.send_as_json(payload)
-    
     status = "🔇 **Muted**" if new_mute else "🎙️ **Unmuted**"
     await ctx.send(f"✅ Mic is now {status}.")
 
@@ -449,20 +525,16 @@ async def m(ctx):
 async def deaf(ctx):
     if len(bot.voice_clients) == 0:
         return await ctx.send("❌ Not in a VC.")
-    
     vc = bot.voice_clients[0]
     
-    # 1. Try to get current state safely
     try:
         current_mute = vc.guild.me.voice.self_mute
         current_deaf = vc.guild.me.voice.self_deaf
         new_deaf = not current_deaf
     except:
-        # Fallback
         new_deaf = True
         current_mute = False
     
-    # 2. Use Channel/Guild ID directly
     payload = {
         "op": 4,
         "d": {
@@ -473,12 +545,10 @@ async def deaf(ctx):
         }
     }
     await bot.ws.send_as_json(payload)
-    
     status = "🔕 **Deafened**" if new_deaf else "🔔 **Undeafened**"
     await ctx.send(f"✅ Headset is now {status}.")
 
-# -------------------------------------------------------
-
+# --- JOIN & AUTO-REC LOGIC ---
 @bot.command()
 async def join(ctx):
     await ctx.send("🔍 Scanning servers...")
@@ -486,70 +556,43 @@ async def join(ctx):
     for guild in bot.guilds:
         member = guild.get_member(ctx.author.id)
         if member and member.voice:
-            try:
-                await member.voice.channel.connect() 
-                await ctx.send(f"👍 Joined **{member.voice.channel.name}** in **{guild.name}**!")
-                found = True
-                break
-            except Exception as e:
-                await ctx.send(f"❌ Connection Error: {e}")
-                return
+            # Try/Except is now handled by on_command_error for clean messages
+            await member.voice.channel.connect() 
+            await ctx.send(f"👍 Joined **{member.voice.channel.name}** in **{guild.name}**!")
+            found = True
+            
+            # TRIGGER AUTO-REC
+            if AUTO_REC_MODE:
+                await asyncio.sleep(1) # Wait for connection stabilization
+                is_merge = (AUTO_REC_MODE == 'merged')
+                await start_recording_logic(ctx, is_merge)
+            break
+            
     if not found:
         await ctx.send("❌ I couldn't find you in any Voice Channel.")
 
 @bot.command()
 async def joinid(ctx, channel_id: str):
-    try:
-        channel = bot.get_channel(int(channel_id))
-        if isinstance(channel, discord.VoiceChannel):
-            await channel.connect()
-            await ctx.send(f"👍 Joined **{channel.name}**")
-        else:
-            await ctx.send("❌ Not a voice channel.")
-    except Exception as e:
-        await ctx.send(f"❌ Error: {e}")
+    channel = bot.get_channel(int(channel_id))
+    if isinstance(channel, discord.VoiceChannel):
+        await channel.connect()
+        await ctx.send(f"👍 Joined **{channel.name}**")
+        
+        # TRIGGER AUTO-REC
+        if AUTO_REC_MODE:
+            await asyncio.sleep(1)
+            is_merge = (AUTO_REC_MODE == 'merged')
+            await start_recording_logic(ctx, is_merge)
+    else:
+        await ctx.send("❌ Not a voice channel.")
 
 @bot.command()
 async def record(ctx):
-    if len(bot.voice_clients) == 0:
-        return await ctx.send("❌ I am not in a VC.")
-    vc = bot.voice_clients[0]
-    if vc.recording:
-        return await ctx.send("Already recording.")
-
-    global MERGE_MODE, SESSION_START_TIME
-    MERGE_MODE = False 
-    SESSION_START_TIME = datetime.datetime.now() 
-
-    vc.start_recording(
-        SyncWaveSink(), 
-        finished_callback, 
-        ctx.channel 
-    )
-    ist = pytz.timezone('Asia/Kolkata')
-    start_time = datetime.datetime.now(ist).strftime("%I:%M %p")
-    await ctx.send(f"🔴 **Recording Started (Synced) at {start_time} IST!**")
+    await start_recording_logic(ctx, False)
 
 @bot.command()
 async def recordall(ctx):
-    if len(bot.voice_clients) == 0:
-        return await ctx.send("❌ I am not in a VC.")
-    vc = bot.voice_clients[0]
-    if vc.recording:
-        return await ctx.send("Already recording.")
-
-    global MERGE_MODE, SESSION_START_TIME
-    MERGE_MODE = True 
-    SESSION_START_TIME = datetime.datetime.now() 
-
-    vc.start_recording(
-        SyncWaveSink(), 
-        finished_callback, 
-        ctx.channel 
-    )
-    ist = pytz.timezone('Asia/Kolkata')
-    start_time = datetime.datetime.now(ist).strftime("%I:%M %p")
-    await ctx.send(f"🔴 **Recording Started (Synced + Merged) at {start_time} IST!**")
+    await start_recording_logic(ctx, True)
 
 @bot.command()
 async def stop(ctx):
