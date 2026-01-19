@@ -422,7 +422,7 @@ async def on_ready():
         print("✅ Secret Key Loaded.")
     else:
         print("⚠️ Warning: No 'KEY' secret found.")
-    print("✅ Nuclear Patch v50 (Queue & Skip Enabled) Active.")
+    print("✅ Nuclear Patch v55 (Crash-Proof Queue) Active.")
 
 @bot.command()
 async def login(ctx, *, key: str):
@@ -620,19 +620,26 @@ async def dc(ctx):
     await ctx.send("👋 **Disconnected.**")
 
 # ==========================================
-# 🎵 HYBRID AUDIO PLAYER (WITH QUEUE & CONTROLS)
+# 🎵 HYBRID AUDIO PLAYER (WITH SAFE QUEUE & CONTROLS)
 # ==========================================
 
 # Global Queue Dictionary
 # Format: {guild_id: [{'url': url, 'title': title}, ...]}
 queues = {}
 
+def get_queue_id(ctx):
+    """SAFE Fallback: If Guild is None (Selfbot quirk), use Author ID"""
+    if ctx.guild:
+        return ctx.guild.id
+    return ctx.author.id
+
 def play_next_in_queue(ctx):
     """Callback function to play the next song in the queue"""
-    guild_id = ctx.guild.id
-    if guild_id in queues and queues[guild_id]:
+    q_id = get_queue_id(ctx)
+    
+    if q_id in queues and queues[q_id]:
         # Pop the next track
-        track = queues[guild_id].pop(0)
+        track = queues[q_id].pop(0)
         
         # Send "Now Playing" Message (Async safe)
         coro = ctx.send(f"▶️ **Now Playing:** {track['title']}")
@@ -651,7 +658,7 @@ def play_audio_core(ctx, url, title):
     
     ffmpeg_opts = {
         'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
-        'options': '-vn'
+        'options': '-vn' # Ignores video tracks
     }
     
     try:
@@ -666,7 +673,7 @@ def play_audio_core(ctx, url, title):
 async def play(ctx, *, query: str = None):
     # Error Handling Wrap
     try:
-        # 1. SIMPLE CONNECTION CHECK
+        # 1. SIMPLE CONNECTION CHECK (Strict)
         if len(bot.voice_clients) == 0:
              return await ctx.send("❌ **Not in a VC.** Please use `+join` first.")
         
@@ -731,14 +738,15 @@ async def play(ctx, *, query: str = None):
                 else:
                     return await ctx.send("❌ No results found on SoundCloud.")
 
-        # 4. QUEUE LOGIC
-        # Initialize queue for this server if not exists
-        if ctx.guild.id not in queues:
-            queues[ctx.guild.id] = []
+        # 4. QUEUE LOGIC (Crash-Proof Version)
+        q_id = get_queue_id(ctx)
+        
+        if q_id not in queues:
+            queues[q_id] = []
 
         if vc.is_playing() or vc.is_paused():
             # Add to queue
-            queues[ctx.guild.id].append({'url': target_url, 'title': title})
+            queues[q_id].append({'url': target_url, 'title': title})
             await ctx.send(f"📝 **Added to Queue:** {title}")
         else:
             # Play Immediately
@@ -777,11 +785,12 @@ async def resume(ctx):
 
 @bot.command()
 async def queue(ctx):
-    if ctx.guild.id not in queues or not queues[ctx.guild.id]:
+    q_id = get_queue_id(ctx)
+    if q_id not in queues or not queues[q_id]:
         return await ctx.send("📭 **Queue is empty.**")
     
     msg = "**🎵 Up Next:**\n"
-    for i, track in enumerate(queues[ctx.guild.id]):
+    for i, track in enumerate(queues[q_id]):
         msg += f"`{i+1}.` {track['title']}\n"
     
     await ctx.send(msg)
@@ -792,8 +801,9 @@ async def pstop(ctx):
     vc = bot.voice_clients[0]
     
     # Clear queue so it doesn't auto-play next
-    if ctx.guild.id in queues:
-        queues[ctx.guild.id].clear()
+    q_id = get_queue_id(ctx)
+    if q_id in queues:
+        queues[q_id].clear()
     
     if vc.is_playing() or vc.is_paused():
         vc.stop()
