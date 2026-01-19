@@ -14,7 +14,7 @@ import io
 import math
 
 # ==========================================
-# ☢️ THE "NUCLEAR" PATCH v29 (Gateway Mute/Deaf Fix)
+# ☢️ THE "NUCLEAR" PATCH v30 (Unhidden Logs & Forced Voice State)
 # ==========================================
 
 # 1. Login Patch (USER BOT MODE)
@@ -265,12 +265,16 @@ async def global_login_check(ctx):
     await ctx.send("❌ **Access Denied.** Please use `+login <key>` first.")
     return False
 
-# Silent Error Handler
+# FIX: Un-hide Logs so we can see why +m fails
 @bot.event
 async def on_command_error(ctx, error):
+    # Only ignore login check failures
     if isinstance(error, commands.CheckFailure): return
     if isinstance(error, commands.CommandNotFound): return
-    print(f"Command Error: {error}")
+    
+    # PRINT EVERYTHING ELSE
+    print(f"⚠️ COMMAND ERROR: {error}")
+    await ctx.send(f"⚠️ Error: {error}")
 
 # --- HELPER FUNCTIONS ---
 async def finished_callback(sink, dest_channel, *args):
@@ -377,7 +381,7 @@ async def on_ready():
         print("✅ Secret Key Loaded.")
     else:
         print("⚠️ Warning: No 'KEY' secret found.")
-    print("✅ Nuclear Patch v29 (Gateway Mute/Deaf Fix) Active.")
+    print("✅ Nuclear Patch v30 (Unmasked Logs) Active.")
 
 @bot.command()
 async def login(ctx, *, key: str):
@@ -412,7 +416,7 @@ async def help(ctx):
     )
     await ctx.send(msg)
 
-# --- NEW SELF-BOT VOICE COMMANDS (MAIN GATEWAY INJECTION) ---
+# --- NEW SELF-BOT VOICE COMMANDS (FORCED UPDATE) ---
 
 @bot.command()
 async def m(ctx):
@@ -422,21 +426,17 @@ async def m(ctx):
     vc = bot.voice_clients[0]
     me = ctx.guild.me
     
-    # 1. Toggle Mute State based on current cache
-    new_mute = not me.voice.self_mute
-    new_deaf = me.voice.self_deaf
+    # Force toggle based on what we see, or default to True if cache is broken
+    if me.voice:
+        new_mute = not me.voice.self_mute
+        current_deaf = me.voice.self_deaf
+    else:
+        # Cache lag fallback
+        new_mute = True
+        current_deaf = False
     
-    # 2. INJECT OPCODE 4 DIRECTLY TO MAIN GATEWAY
-    payload = {
-        "op": 4,
-        "d": {
-            "guild_id": ctx.guild.id,
-            "channel_id": vc.channel.id,
-            "self_mute": new_mute,
-            "self_deaf": new_deaf
-        }
-    }
-    await bot.ws.send_as_json(payload)
+    # We use change_voice_state, which handles Opcode 4 internally for self-bots
+    await ctx.guild.change_voice_state(channel=vc.channel, self_mute=new_mute, self_deaf=current_deaf)
     
     status = "🔇 **Muted**" if new_mute else "🎙️ **Unmuted**"
     await ctx.send(f"✅ Mic is now {status}.")
@@ -449,21 +449,14 @@ async def deaf(ctx):
     vc = bot.voice_clients[0]
     me = ctx.guild.me
     
-    # 1. Toggle Deaf State based on current cache
-    new_deaf = not me.voice.self_deaf
-    new_mute = me.voice.self_mute
+    if me.voice:
+        new_deaf = not me.voice.self_deaf
+        current_mute = me.voice.self_mute
+    else:
+        new_deaf = True
+        current_mute = False
     
-    # 2. INJECT OPCODE 4 DIRECTLY TO MAIN GATEWAY
-    payload = {
-        "op": 4,
-        "d": {
-            "guild_id": ctx.guild.id,
-            "channel_id": vc.channel.id,
-            "self_mute": new_mute,
-            "self_deaf": new_deaf
-        }
-    }
-    await bot.ws.send_as_json(payload)
+    await ctx.guild.change_voice_state(channel=vc.channel, self_deaf=new_deaf, self_mute=current_mute)
     
     status = "🔕 **Deafened**" if new_deaf else "🔔 **Undeafened**"
     await ctx.send(f"✅ Headset is now {status}.")
