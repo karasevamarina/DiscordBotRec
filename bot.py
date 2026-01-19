@@ -13,7 +13,7 @@ import time
 import io
 import math
 import yt_dlp
-import traceback # Added for detailed error logging
+import traceback
 
 # ==========================================
 # ☢️ THE "NUCLEAR" PATCH v42 (TV Embedded Bypass)
@@ -626,19 +626,29 @@ async def dc(ctx):
 async def play(ctx, *, query: str = None):
     # CRITICAL: Error handling wrap for entire command
     try:
-        # 1. Connection Check
-        if not ctx.author.voice:
-            return await ctx.send("❌ You are not in a VC.")
+        # 1. FIXED: Convert "User" to "Member" (Fixes 'no attribute voice' error)
+        # Self-bots sometimes get a User object (global) instead of Member (server).
+        # We force-fetch the Member object from the guild cache.
+        author_member = None
+        if ctx.guild:
+            author_member = ctx.guild.get_member(ctx.author.id)
+        
+        # Fallback: If cache fails, use ctx.author (and pray it works), but usually get_member fixes it.
+        caller = author_member if author_member else ctx.author
+
+        # 2. Connection Check
+        if not hasattr(caller, 'voice') or not caller.voice:
+             return await ctx.send("❌ You are not in a VC.")
         
         if not ctx.voice_client:
             try:
-                await ctx.author.voice.channel.connect()
+                await caller.voice.channel.connect()
             except Exception as e:
                 return await ctx.send(f"❌ Connection Error: {e}")
         
         vc = ctx.voice_client
 
-        # 2. Handle Attachments (File Uploads)
+        # 3. Handle Attachments (File Uploads)
         if not query and ctx.message.attachments:
             query = ctx.message.attachments[0].url
             await ctx.send("📂 **Playing attached file...**")
@@ -646,7 +656,7 @@ async def play(ctx, *, query: str = None):
         if not query:
             return await ctx.send("❌ Please provide a song name, link, or attach a file.")
 
-        # 3. Determine Mode
+        # 4. Determine Mode
         if query.startswith("http") or query.startswith("www"):
             search_query = query
             display_msg = "🔗 **Processing Link...**"
@@ -661,7 +671,7 @@ async def play(ctx, *, query: str = None):
 
         status_msg = await ctx.send(display_msg)
 
-        # 4. Universal Extraction Options
+        # 5. Universal Extraction Options
         ydl_opts = {
             'format': 'bestaudio/best',
             'noplaylist': True,
@@ -688,7 +698,7 @@ async def play(ctx, *, query: str = None):
             title = info.get('title', 'Unknown Track')
             web_url = info.get('webpage_url', query)
 
-        # 5. FFmpeg Playback
+        # 6. FFmpeg Playback
         ffmpeg_opts = {
             'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
             'options': '-vn' 
