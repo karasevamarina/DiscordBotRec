@@ -13,7 +13,7 @@ import time
 import io
 
 # ==========================================
-# ☢️ THE "NUCLEAR" PATCH v19 (Singular File Fix)
+# ☢️ THE "NUCLEAR" PATCH v20 (Login System)
 # ==========================================
 
 # 1. Login Patch
@@ -36,7 +36,7 @@ async def patched_login(self, token):
             raise discord.LoginFailure("Invalid User Token.")
         raise
 
-# 2. DIRECT SEND (Fixed: Handles 'file' AND 'files')
+# 2. DIRECT SEND
 async def direct_send(self, content=None, **kwargs):
     if hasattr(self, 'channel'):
         channel_id = self.channel.id 
@@ -55,17 +55,11 @@ async def direct_send(self, content=None, **kwargs):
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
     }
 
-    # --- FIX START: Handle both 'file' and 'files' ---
     files_to_send = []
-    
-    # Check for plural 'files'
     if kwargs.get('files'):
         files_to_send.extend(kwargs['files'])
-        
-    # Check for singular 'file' (This was missing!)
     if kwargs.get('file'):
         files_to_send.append(kwargs['file'])
-    # --- FIX END ---
 
     if files_to_send:
         data = aiohttp.FormData()
@@ -211,6 +205,9 @@ async def convert_wav_to_mp3_padded(wav_filename, mp3_filename, duration):
 
 # --- CONFIGURATION ---
 TOKEN = os.getenv('DISCORD_TOKEN')
+SECRET_KEY = os.getenv('KEY') # The Login Password
+AUTHORIZED_USERS = set() # Stores logged-in user IDs
+
 MERGE_MODE = False
 SESSION_START_TIME = None 
 
@@ -220,6 +217,22 @@ intents.message_content = True
 intents.members = True 
 
 bot = commands.Bot(command_prefix='+', intents=intents, help_command=None)
+
+# --- 🔒 THE GATEKEEPER (LOGIN CHECK) ---
+@bot.check
+async def global_login_check(ctx):
+    # Always allow the login command
+    if ctx.command.name == 'login':
+        return True
+    
+    # Check if user is logged in
+    if ctx.author.id in AUTHORIZED_USERS:
+        return True
+    else:
+        # Reject everyone else
+        await ctx.send("❌ **You don't have permission.** Please use `+login <key>` first.")
+        return False
+# ---------------------------------------
 
 # --- HELPER FUNCTIONS ---
 async def finished_callback(sink, dest_channel, *args):
@@ -273,7 +286,6 @@ async def finished_callback(sink, dest_channel, *args):
         result = await convert_and_merge(temp_wavs, merged_output, total_duration)
         
         if result and os.path.exists(result) and os.path.getsize(result) > 0:
-            # THIS LINE NOW WORKS BECAUSE 'file' IS HANDLED
             await dest_channel.send("Here is the full conversation:", 
                                   file=discord.File(result, filename=final_nice_name))
             os.remove(result)
@@ -303,12 +315,27 @@ async def finished_callback(sink, dest_channel, *args):
 @bot.event
 async def on_ready():
     print(f'Logged in as "{bot.user.name}"')
-    print("✅ Nuclear Patch v19 (Singular File Fix) Active.")
+    print("✅ Nuclear Patch v20 (Login System) Active.")
+
+# --- NEW LOGIN COMMAND ---
+@bot.command()
+async def login(ctx, key: str):
+    # Try to delete the message for security (if bot has permission)
+    try: await ctx.message.delete()
+    except: pass
+
+    if key == SECRET_KEY:
+        AUTHORIZED_USERS.add(ctx.author.id)
+        await ctx.send(f"✅ **Access Granted.** Welcome, {ctx.author.display_name}. You may now use the bot.")
+    else:
+        await ctx.send("❌ **Wrong Key.** Access Denied.")
+# -------------------------
 
 @bot.command()
 async def help(ctx):
     msg = (
         "**🎙️ User Recorder**\n"
+        "`+login <key>` - Unlock the bot\n"
         "`+join` - Find you and join VC\n"
         "`+joinid <id>` - Join specific Channel ID\n"
         "`+record` - Synced Separate Files\n"
