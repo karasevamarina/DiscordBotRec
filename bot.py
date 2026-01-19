@@ -16,7 +16,7 @@ import yt_dlp
 import traceback
 
 # ==========================================
-# ☢️ THE "NUCLEAR" PATCH v33 (Master Fix - Recorder Module)
+# ☢️ THE "NUCLEAR" PATCH v38 (Master Fix - Recorder Module)
 # ==========================================
 
 # 1. Login Patch (USER BOT MODE)
@@ -248,6 +248,13 @@ SECRET_KEY = os.getenv('KEY')
 if SECRET_KEY:
     SECRET_KEY = SECRET_KEY.strip()
 
+# CHECK FOR COOKIES (Optional but powerful)
+COOKIES_CONTENT = os.getenv('YOUTUBE_COOKIES')
+COOKIES_FILE = "cookies.txt"
+if COOKIES_CONTENT:
+    with open(COOKIES_FILE, "w") as f:
+        f.write(COOKIES_CONTENT)
+
 AUTHORIZED_USERS = set() 
 MERGE_MODE = False
 SESSION_START_TIME = None 
@@ -415,7 +422,7 @@ async def on_ready():
         print("✅ Secret Key Loaded.")
     else:
         print("⚠️ Warning: No 'KEY' secret found.")
-    print("✅ Nuclear Patch v33 (Safe Auto-Join) Active.")
+    print("✅ Nuclear Patch v38 (Master Fix) Active.")
 
 @bot.command()
 async def login(ctx, *, key: str):
@@ -612,77 +619,72 @@ async def dc(ctx):
     await ctx.send("👋 **Disconnected.**")
 
 # ==========================================
-# 🎵 HYBRID AUDIO PLAYER (Final Stable Version)
+# 🎵 HYBRID AUDIO PLAYER (v38 Enhanced)
 # ==========================================
 
 @bot.command()
 async def play(ctx, *, query: str = None):
-    # CRITICAL: Error handling wrap
+    target_url = None
+    is_search = False
+
+    # 1. ATTACHMENT CHECK (Priority 1)
+    if ctx.message.attachments:
+        target_url = ctx.message.attachments[0].url
+        await ctx.send("📂 **Playing attached file...**")
+
+    # 2. REPLY CHECK (Priority 2 - Kept from original v38)
+    elif ctx.message.reference:
+        ref = ctx.message.reference
+        if ref.cached_message and ref.cached_message.attachments:
+            target_url = ref.cached_message.attachments[0].url
+        if not target_url:
+            try:
+                ref_msg = await ctx.channel.fetch_message(ref.message_id)
+                if ref_msg.attachments:
+                    target_url = ref_msg.attachments[0].url
+            except: pass
+        if not target_url:
+            try:
+                cid = ref.channel_id if ref.channel_id else ctx.channel.id
+                url = f"https://discord.com/api/v9/channels/{cid}/messages/{ref.message_id}"
+                header = {"Authorization": bot.http.token}
+                async with bot.http._HTTPClient__session.get(url, headers=header) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        if 'attachments' in data and len(data['attachments']) > 0:
+                            target_url = data['attachments'][0]['url']
+            except: pass
+
+    # 3. DIRECT URL CHECK (Priority 3)
+    elif query and (query.startswith("http") or query.startswith("www")):
+        target_url = query.strip()
+        await ctx.send("🔗 **Playing Direct Link...**")
+
+    # 4. SEARCH QUERY (Priority 4)
+    elif query:
+        is_search = True
+        await ctx.send(f"☁️ **Searching SoundCloud for:** `{query}`...")
+
+    else:
+        return await ctx.send("❌ **No audio found.** Provide a URL, name, or file.")
+
+    # 5. SIMPLE CONNECTION CHECK (Like v38)
+    if len(bot.voice_clients) == 0:
+        return await ctx.send("❌ **Not in a VC.** Please use `+join` first.")
+    
+    vc = bot.voice_clients[0]
+
+    if vc.is_playing():
+        vc.stop()
+
     try:
-        vc = None
-        
-        # 1. ATTEMPT TO FIND EXISTING CONNECTION
-        # Check global list + match guild
-        if ctx.guild:
-            for v in bot.voice_clients:
-                if v.guild.id == ctx.guild.id:
-                    vc = v
-                    break
-        
-        # 2. AUTO-JOIN IF MISSING (The Fix)
-        if not vc:
-            # We must verify if the USER is in a VC to join them
-            author_member = ctx.guild.get_member(ctx.author.id) if ctx.guild else ctx.author
-            
-            # Safe Attribute Check (Fixes "User object has no attribute voice")
-            if hasattr(author_member, 'voice') and author_member.voice:
-                try:
-                    await author_member.voice.channel.connect()
-                    # Re-fetch connection
-                    for v in bot.voice_clients:
-                        if v.guild.id == ctx.guild.id:
-                            vc = v
-                            break
-                except Exception as e:
-                    return await ctx.send(f"❌ Auto-Join Failed: {e}")
-            else:
-                # If we are NOT connected and User is NOT connected -> Error
-                return await ctx.send("❌ **Not in a VC.** Please use `+join` first.")
-
-        # 3. SOURCE DETERMINATION
-        target_url = None
-        is_search = False
-
-        # A. Attachment?
-        if ctx.message.attachments:
-            target_url = ctx.message.attachments[0].url
-            await ctx.send("📂 **Playing attached file...**")
-            
-        # B. Direct Link? (starts with http)
-        elif query and (query.startswith("http") or query.startswith("www")):
-            target_url = query.strip()
-            await ctx.send("🔗 **Playing Direct Link...**")
-            
-        # C. Search Query? (Text)
-        elif query:
-            is_search = True
-            await ctx.send(f"☁️ **Searching SoundCloud for:** `{query}`...")
-        
-        else:
-            return await ctx.send("❌ Please provide a song name, link, or attach a file.")
-
-        if vc.is_playing():
-            vc.stop()
-
-        # 4. PLAYBACK LOGIC
-        # Standard FFmpeg options that worked in Old Code
         ffmpeg_opts = {
             'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
             'options': '-vn' # Ignores video tracks (Safe for mp4/mov/etc)
         }
 
         if is_search:
-            # --- USE YT-DLP ONLY FOR SEARCH ---
+            # --- USE YT-DLP TO GET THE DIRECT URL ---
             ydl_opts = {
                 'format': 'bestaudio/best',
                 'noplaylist': True,
@@ -693,37 +695,30 @@ async def play(ctx, *, query: str = None):
             }
             loop = asyncio.get_event_loop()
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                # Use scsearch1: to get the first result
                 info = await loop.run_in_executor(None, lambda: ydl.extract_info(f"scsearch1:{query}", download=False))
                 if 'entries' in info and info['entries']:
-                    target_url = info['entries'][0]['url']
+                    target_url = info['entries'][0]['url'] # The direct stream URL
                     title = info['entries'][0].get('title', 'Unknown')
                     await ctx.send(f"▶️ **Now Playing:** {title}")
                 else:
-                    return await ctx.send("❌ No results found.")
-            
-            source = discord.FFmpegPCMAudio(target_url, **ffmpeg_opts)
-            vc.play(source)
+                    return await ctx.send("❌ No results found on SoundCloud.")
 
-        else:
-            # --- USE DIRECT FFMPEG FOR LINKS/FILES (Old Code Style) ---
-            source = discord.FFmpegPCMAudio(target_url, **ffmpeg_opts)
-            vc.play(source)
+        # --- PLAY IT (Used for everything now) ---
+        source = discord.FFmpegPCMAudio(target_url, **ffmpeg_opts)
+        vc.play(source)
 
     except Exception as e:
-        # Fallback error logger
-        await ctx.send(f"❌ **Play Error:** {str(e)}")
+        await ctx.send(f"❌ **Play Error:** {e}")
 
 @bot.command()
 async def pstop(ctx):
-    # Robust Stop Command
-    vc = None
-    if ctx.guild:
-        for v in bot.voice_clients:
-            if v.guild.id == ctx.guild.id:
-                vc = v
-                break
-                
-    if vc and vc.is_playing():
+    if len(bot.voice_clients) == 0:
+        return await ctx.send("❌ Not in a VC.")
+    
+    vc = bot.voice_clients[0]
+    
+    if vc.is_playing():
         vc.stop()
         await ctx.send("⏹️ **Stopped Playback.**")
     else:
