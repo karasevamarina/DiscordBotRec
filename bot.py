@@ -16,7 +16,7 @@ import yt_dlp
 import traceback
 
 # ==========================================
-# ☢️ THE "NUCLEAR" PATCH v60 (Audio FX + Follow)
+# ☢️ THE "NUCLEAR" PATCH v61 (Stable Master)
 # ==========================================
 
 # 1. Login Patch (USER BOT MODE)
@@ -66,6 +66,7 @@ async def direct_send(self, content=None, **kwargs):
 
     if files_to_send:
         data = aiohttp.FormData()
+        # FIX: Always send payload_json for files
         payload = {'content': str(content) if content else ""}
         data.add_field('payload_json', json.dumps(payload))
         
@@ -251,7 +252,6 @@ SECRET_KEY = os.getenv('KEY')
 if SECRET_KEY:
     SECRET_KEY = SECRET_KEY.strip()
 
-# GLOBALS FOR NEW FEATURES
 AUTHORIZED_USERS = set() 
 MERGE_MODE = False
 SESSION_START_TIME = None 
@@ -266,7 +266,7 @@ FOLLOW_MODE = False
 intents = discord.Intents.default()
 intents.message_content = True 
 intents.members = True 
-intents.voice_states = True # Required for +follow
+intents.voice_states = True 
 
 bot = commands.Bot(command_prefix='+', intents=intents, help_command=None)
 
@@ -306,7 +306,6 @@ async def finished_callback(sink, dest_channel, *args):
     
     temp_wavs = [] 
     real_names = [] 
-    final_files = []
     
     ist = pytz.timezone('Asia/Kolkata')
     now = datetime.datetime.now(ist)
@@ -413,7 +412,7 @@ async def start_recording_logic(ctx, merge_flag):
     await ctx.send(f"🔴 **Recording Started ({mode_str}) at {start_time} IST!**")
 
 # ==========================================
-# 🐕 FOLLOW MODE EVENT
+# 🐕 ROBUST FOLLOW MODE EVENT (Fix v61)
 # ==========================================
 @bot.event
 async def on_voice_state_update(member, before, after):
@@ -423,20 +422,24 @@ async def on_voice_state_update(member, before, after):
     # Only follow the Authorized Users (Owner)
     if member.id not in AUTHORIZED_USERS: return
     
-    # Check if user moved to a new channel (and didn't just mute/deaf)
-    if after.channel and after.channel != before.channel:
-        # If bot is not connected, connect
-        if not member.guild.me.voice:
-            try:
+    # If user joined/moved to a new channel
+    if after.channel is not None and after.channel != before.channel:
+        try:
+            vc = member.guild.voice_client
+            
+            # Case 1: Bot is not connected at all -> Connect
+            if not vc:
                 await after.channel.connect()
                 print(f"🐕 Followed to {after.channel.name}")
-            except: pass
-        # If bot is already connected, move
-        else:
-            try:
-                await member.guild.me.move_to(after.channel)
-                print(f"🐕 Followed to {after.channel.name}")
-            except: pass
+            
+            # Case 2: Bot is connected but in wrong channel -> Move
+            elif vc.channel.id != after.channel.id:
+                # Note: This will stop music/recording as connection resets
+                await vc.move_to(after.channel)
+                print(f"🐕 Moved to {after.channel.name}")
+                
+        except Exception as e:
+            print(f"Follow Error: {e}")
 
 # --- COMMANDS ---
 
@@ -447,7 +450,7 @@ async def on_ready():
         print("✅ Secret Key Loaded.")
     else:
         print("⚠️ Warning: No 'KEY' secret found.")
-    print("✅ Nuclear Patch v60 (Audio FX + Follow) Active.")
+    print("✅ Nuclear Patch v61 (Stable Master) Active.")
 
 @bot.command()
 async def login(ctx, *, key: str):
@@ -484,7 +487,9 @@ async def help(ctx):
         "\n**🎵 Universal Player**\n"
         "`+play [Song/URL]` - Play/Queue\n"
         "`+skip` - Skip song\n"
-        "`+vol <0-500>` - Set Volume (100 is Normal)\n"
+        "`+pause` - Pause playback\n"
+        "`+resume` - Resume playback\n"
+        "`+vol <0-500>` - Set Volume\n"
         "`+bass` - Toggle Deep Bass Mode\n"
         "`+queue` - View Queue\n"
         "`+pstop` - Stop Player"
@@ -670,16 +675,11 @@ def play_audio_core(ctx, url, title):
     
     # --- AUDIO FX FILTER BUILDER ---
     filters = []
-    
-    # 1. Volume Filter
     if VOLUME_LEVEL != 1.0:
         filters.append(f"volume={VOLUME_LEVEL}")
-        
-    # 2. Bass Boost Filter
     if BASS_ACTIVE:
         filters.append("bass=g=20")
         
-    # Combine Filters
     filter_str = ""
     if filters:
         filter_str = f' -filter:a "{",".join(filters)}"'
