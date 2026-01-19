@@ -16,7 +16,7 @@ import yt_dlp
 import traceback
 
 # ==========================================
-# ☢️ THE "NUCLEAR" PATCH v38 (Master Fix - Recorder Module)
+# ☢️ THE "NUCLEAR" PATCH v42 (Old Working Recorder Base)
 # ==========================================
 
 # 1. Login Patch (USER BOT MODE)
@@ -248,6 +248,13 @@ SECRET_KEY = os.getenv('KEY')
 if SECRET_KEY:
     SECRET_KEY = SECRET_KEY.strip()
 
+# CHECK FOR COOKIES (Optional but powerful)
+COOKIES_CONTENT = os.getenv('YOUTUBE_COOKIES')
+COOKIES_FILE = "cookies.txt"
+if COOKIES_CONTENT:
+    with open(COOKIES_FILE, "w") as f:
+        f.write(COOKIES_CONTENT)
+
 AUTHORIZED_USERS = set() 
 MERGE_MODE = False
 SESSION_START_TIME = None 
@@ -415,7 +422,7 @@ async def on_ready():
         print("✅ Secret Key Loaded.")
     else:
         print("⚠️ Warning: No 'KEY' secret found.")
-    print("✅ Nuclear Patch v57 (Restored Recorder) Active.")
+    print("✅ Nuclear Patch v58 (Old Recorder + New Player) Active.")
 
 @bot.command()
 async def login(ctx, *, key: str):
@@ -613,7 +620,7 @@ async def dc(ctx):
     await ctx.send("👋 **Disconnected.**")
 
 # ==========================================
-# 🎵 HYBRID AUDIO PLAYER (WITH SAFE QUEUE & CALLBACKS)
+# 🎵 NEW PLAYER (FROM v57) 
 # ==========================================
 
 # Global Queue Dictionary
