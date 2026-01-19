@@ -14,7 +14,7 @@ import io
 import math
 
 # ==========================================
-# ☢️ THE "NUCLEAR" PATCH v32 (Auto-Rec & Friendly Errors)
+# ☢️ THE "NUCLEAR" PATCH v33 (Master Fix)
 # ==========================================
 
 # 1. Login Patch (USER BOT MODE)
@@ -249,8 +249,6 @@ if SECRET_KEY:
 AUTHORIZED_USERS = set() 
 MERGE_MODE = False
 SESSION_START_TIME = None 
-
-# NEW: Auto-Rec Variable (None, 'separate', 'merged')
 AUTO_REC_MODE = None 
 
 # --- SETUP ---
@@ -271,31 +269,19 @@ async def global_login_check(ctx):
 # --- 😊 FRIENDLY ERROR HANDLER ---
 @bot.event
 async def on_command_error(ctx, error):
-    # Ignore CheckFailures (The Gatekeeper handles sending the message)
     if isinstance(error, commands.CheckFailure): return
     if isinstance(error, commands.CommandNotFound): return
     
-    # Catch specific errors to make them friendly
     if isinstance(error, commands.CommandInvokeError):
-        # Unwrap the error
         original = error.original
-        
-        # 1. Permission Error
         if isinstance(original, discord.Forbidden):
             return await ctx.send("❌ I don't have permission to join/speak in that channel.")
-            
-        # 2. Already Connected / Recording Error
         if isinstance(original, discord.ClientException):
-            # This handles "Already connected" or "Already recording"
-            # We assume the user sees the bot is working, so we can be silent or brief.
             return await ctx.send(f"⚠️ {str(original)}")
-            
-        # 3. HTTP Error (Like Channel Full)
         if isinstance(original, discord.HTTPException):
-            if original.status == 400: # Often means full channel for user bots
+            if original.status == 400:
                 return await ctx.send("❌ Unable to join. The channel might be full.")
     
-    # Generic catch-all for other errors (Print to console, Clean msg to user)
     print(f"⚠️ UNHANDLED ERROR: {error}")
     await ctx.send("❌ An error occurred while executing the command.")
 
@@ -311,6 +297,7 @@ async def finished_callback(sink, dest_channel, *args):
     
     temp_wavs = [] 
     real_names = [] 
+    final_files = []
     
     ist = pytz.timezone('Asia/Kolkata')
     now = datetime.datetime.now(ist)
@@ -392,11 +379,13 @@ async def finished_callback(sink, dest_channel, *args):
     for f in temp_wavs:
         if os.path.exists(f): os.remove(f)
 
-# --- REUSABLE RECORDING FUNCTION (For AutoRec) ---
+# --- REUSABLE RECORDING FUNCTION (Fixed for User Bots) ---
 async def start_recording_logic(ctx, merge_flag):
-    vc = ctx.guild.voice_client
-    if not vc:
+    # FIX: Use bot.voice_clients[0] instead of ctx.guild.voice_client
+    if len(bot.voice_clients) == 0:
         return await ctx.send("❌ I am not in a VC.")
+    
+    vc = bot.voice_clients[0]
     
     if vc.recording:
         return await ctx.send("⚠️ Already recording.")
@@ -425,7 +414,7 @@ async def on_ready():
         print("✅ Secret Key Loaded.")
     else:
         print("⚠️ Warning: No 'KEY' secret found.")
-    print("✅ Nuclear Patch v32 (AutoRec & Friendly Errors) Active.")
+    print("✅ Nuclear Patch v33 (Master Fix) Active.")
 
 @bot.command()
 async def login(ctx, *, key: str):
@@ -461,7 +450,6 @@ async def help(ctx):
     )
     await ctx.send(msg)
 
-# --- AUTO REC COMMAND ---
 @bot.command()
 async def autorec(ctx, option: str = None, mode: str = None):
     global AUTO_REC_MODE
@@ -477,10 +465,9 @@ async def autorec(ctx, option: str = None, mode: str = None):
         await ctx.send("✅ Auto-Record disabled.")
         return
 
-    # Handle "+autorec on" -> ask for mode
     if option == "on":
         if mode:
-            option = mode.lower() # Handle "+autorec on merged"
+            option = mode.lower() 
         else:
             return await ctx.send("⚠️ Please specify mode: `+autorec separate` or `+autorec merged`")
 
@@ -493,7 +480,7 @@ async def autorec(ctx, option: str = None, mode: str = None):
     else:
         await ctx.send("❌ Invalid mode. Use `separate`, `merged`, or `off`.")
 
-# --- MUTE/DEAF (Robust) ---
+# --- MUTE/DEAF (Robust v31 Logic) ---
 @bot.command()
 async def m(ctx):
     if len(bot.voice_clients) == 0:
@@ -511,7 +498,7 @@ async def m(ctx):
     payload = {
         "op": 4,
         "d": {
-            "guild_id": vc.channel.guild.id,
+            "guild_id": vc.channel.guild.id, # <--- Direct ID access (Safe)
             "channel_id": vc.channel.id,
             "self_mute": new_mute,
             "self_deaf": current_deaf
@@ -556,14 +543,13 @@ async def join(ctx):
     for guild in bot.guilds:
         member = guild.get_member(ctx.author.id)
         if member and member.voice:
-            # Try/Except is now handled by on_command_error for clean messages
             await member.voice.channel.connect() 
             await ctx.send(f"👍 Joined **{member.voice.channel.name}** in **{guild.name}**!")
             found = True
             
             # TRIGGER AUTO-REC
             if AUTO_REC_MODE:
-                await asyncio.sleep(1) # Wait for connection stabilization
+                await asyncio.sleep(1) 
                 is_merge = (AUTO_REC_MODE == 'merged')
                 await start_recording_logic(ctx, is_merge)
             break
