@@ -15,7 +15,7 @@ import math
 import yt_dlp
 
 # ==========================================
-# ☢️ THE "NUCLEAR" PATCH v33 (Master Fix - Recorder Module)
+# ☢️ THE "NUCLEAR" PATCH v42 (TV Embedded Bypass)
 # ==========================================
 
 # 1. Login Patch (USER BOT MODE)
@@ -247,6 +247,13 @@ SECRET_KEY = os.getenv('KEY')
 if SECRET_KEY:
     SECRET_KEY = SECRET_KEY.strip()
 
+# CHECK FOR COOKIES (Optional but powerful)
+COOKIES_CONTENT = os.getenv('YOUTUBE_COOKIES')
+COOKIES_FILE = "cookies.txt"
+if COOKIES_CONTENT:
+    with open(COOKIES_FILE, "w") as f:
+        f.write(COOKIES_CONTENT)
+
 AUTHORIZED_USERS = set() 
 MERGE_MODE = False
 SESSION_START_TIME = None 
@@ -414,7 +421,7 @@ async def on_ready():
         print("✅ Secret Key Loaded.")
     else:
         print("⚠️ Warning: No 'KEY' secret found.")
-    print("✅ Nuclear Patch v41 (YouTube iOS Bypass) Active.")
+    print("✅ Nuclear Patch v42 (TV Embedded Bypass) Active.")
 
 @bot.command()
 async def login(ctx, *, key: str):
@@ -649,7 +656,7 @@ async def play(ctx, *, direct_url: str = None):
 
         if is_youtube:
             await ctx.send("🔍 **Processing YouTube Link...**")
-            # NUCLEAR FIX v41: USE iOS CLIENT TO BYPASS DATA CENTER BLOCK
+            # NUCLEAR FIX v42: USE TV_EMBEDDED CLIENT (Bypasses Datacenter Blocks)
             ydl_opts = {
                 'format': 'bestaudio/best',
                 'noplaylist': True,
@@ -657,7 +664,7 @@ async def play(ctx, *, direct_url: str = None):
                 'nocheckcertificate': True,
                 'extractor_args': {
                     'youtube': {
-                        'player_client': ['ios', 'web_creator'] # iOS + Web Creator often bypass login
+                        'player_client': ['tv_embedded', 'web_embedded'] # <--- THE FIX
                     }
                 },
                 'postprocessors': [{
@@ -666,6 +673,12 @@ async def play(ctx, *, direct_url: str = None):
                     'preferredquality': '192',
                 }],
             }
+            
+            # COOKIE LOADING (Automatic if file exists)
+            if os.path.exists("cookies.txt"):
+                ydl_opts['cookiefile'] = "cookies.txt"
+                print("🍪 Loading cookies for YouTube...")
+
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = await asyncio.to_thread(ydl.extract_info, target_url, download=False)
                 final_url = info['url']
@@ -678,7 +691,7 @@ async def play(ctx, *, direct_url: str = None):
     except Exception as e:
         err_msg = str(e)
         if "Sign in to confirm" in err_msg:
-            await ctx.send("❌ **YouTube Error:** Google has blocked this server IP. Please use a direct file link instead.")
+            await ctx.send("❌ **YouTube Critical Error:** Server IP is blacklisted. Use a direct MP3 link.")
         else:
             await ctx.send(f"❌ **Play Error:** {e}")
 
