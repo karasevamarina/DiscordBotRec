@@ -13,7 +13,7 @@ import time
 import io
 
 # ==========================================
-# ☢️ THE "NUCLEAR" PATCH v17 (Safe Merge Fix)
+# ☢️ THE "NUCLEAR" PATCH v18 (Merge Logic Fix)
 # ==========================================
 
 # 1. Login Patch
@@ -73,8 +73,11 @@ async def direct_send(self, content=None, **kwargs):
         headers.pop("Content-Type", None) 
         try:
             async with session.post(url, data=data, headers=headers) as resp:
+                if resp.status != 200:
+                    print(f"❌ Upload Failed: {resp.status}")
                 return await resp.json()
-        except:
+        except Exception as e:
+            print(f"❌ Upload Error: {e}")
             return None
     else:
         headers["Content-Type"] = "application/json"
@@ -138,7 +141,7 @@ class SyncWaveSink(discord.sinks.WaveSink):
         
         elapsed_seconds = time.time() - self.start_time
         expected_bytes = int(elapsed_seconds * self.bytes_per_second)
-        expected_bytes = expected_bytes - (expected_bytes % 4) # Align 4 bytes
+        expected_bytes = expected_bytes - (expected_bytes % 4) 
         
         current_bytes = file.tell()
         padding_needed = expected_bytes - current_bytes
@@ -151,7 +154,7 @@ class SyncWaveSink(discord.sinks.WaveSink):
         file.write(data)
 
 # ==========================================
-# 🎵 SAFE MERGE (Fixes Emojis/Unicode)
+# 🎵 SAFE MERGE (Fixed Duration Logic)
 # ==========================================
 async def convert_and_merge(file_list, output_filename, duration):
     if not file_list: return None
@@ -159,15 +162,26 @@ async def convert_and_merge(file_list, output_filename, duration):
     cmd = ['ffmpeg', '-y']
     for f in file_list:
         cmd.extend(['-i', f])
-        
-    # Mix + Pad to Duration + Normalize=0 (Keep Volume)
-    cmd.extend([
-        '-filter_complex', 
-        f'amix=inputs={len(file_list)}:duration=first:dropout_transition=3:normalize=0,apad', 
-        '-t', str(duration),
-        '-b:a', '128k', 
-        output_filename
-    ])
+    
+    # CASE 1: Single File (Just pad and convert)
+    if len(file_list) == 1:
+         cmd.extend([
+            '-af', 'apad', 
+            '-t', str(duration),
+            '-b:a', '128k', 
+            output_filename
+        ])
+         
+    # CASE 2: Multiple Files (Mix, then pad)
+    else:
+        # Changed duration=first to duration=longest to prevent cutting
+        cmd.extend([
+            '-filter_complex', 
+            f'amix=inputs={len(file_list)}:duration=longest:dropout_transition=3:normalize=0,apad', 
+            '-t', str(duration),
+            '-b:a', '128k', 
+            output_filename
+        ])
         
     process = await asyncio.create_subprocess_exec(*cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     await process.communicate()
@@ -210,18 +224,17 @@ async def finished_callback(sink, dest_channel, *args):
         
     await dest_channel.send(f"✅ **Recording finished.** Duration: {int(total_duration)}s. Processing...")
     
-    temp_wavs = [] # Safe names for FFmpeg
-    real_names = [] # Nice names for humans
+    temp_wavs = [] 
+    real_names = [] 
     final_files = []
     
     ist = pytz.timezone('Asia/Kolkata')
     now = datetime.datetime.now(ist)
     time_str = now.strftime("%I-%M-%p")
 
-    # 1. Process Files with SAFE TEMP NAMES
+    # 1. Process Files
     i = 0
     for user_id, audio in sink.audio_data.items():
-        # Get Real Name for later
         username = None
         try:
             if hasattr(dest_channel, 'guild'):
@@ -234,12 +247,10 @@ async def finished_callback(sink, dest_channel, *args):
         if not username:
             username = await asyncio.to_thread(fetch_real_name_sync, user_id, bot.http.token)
 
-        # Create nice filename for final output
         safe_username = "".join(x for x in username if x.isalnum() or x in "._- ")
         real_name = f"{safe_username}_{time_str}.mp3"
         real_names.append(real_name)
 
-        # Save as SAFE temp file (input_0.wav) to avoid FFmpeg emoji crash
         temp_name = f"input_{i}.wav"
         with open(temp_name, "wb") as f:
             f.write(audio.file.getbuffer())
@@ -248,28 +259,25 @@ async def finished_callback(sink, dest_channel, *args):
     
     global MERGE_MODE
     
-    if MERGE_MODE:
+    if MERGE_MODE and temp_wavs:
         await dest_channel.send("🔄 **Merging & Padding...**")
-        merged_output = "merged_temp.mp3" # Safe output name
-        final_nice_name = f"Conversation_{time_str}.mp3" # Nice name for upload
+        merged_output = "merged_temp.mp3" 
+        final_nice_name = f"Conversation_{time_str}.mp3" 
         
         result = await convert_and_merge(temp_wavs, merged_output, total_duration)
         
-        if result and os.path.exists(result):
-            # Send with nice name
+        # ADDED FILE SIZE CHECK (Fixes ghost messages)
+        if result and os.path.exists(result) and os.path.getsize(result) > 0:
             await dest_channel.send("Here is the full conversation:", 
                                   file=discord.File(result, filename=final_nice_name))
             os.remove(result)
         else:
-            await dest_channel.send("❌ Merge failed. Sending separate files as backup.")
-            # FALLBACK to separate files if merge fails
+            await dest_channel.send("❌ Merge failed (Empty or Error). Sending separate files.")
             MERGE_MODE = False 
-            # (Logic continues below to convert separate files)
 
     if not MERGE_MODE:
-        # PADDED CONVERSION FOR INDIVIDUAL FILES
         for idx, wav in enumerate(temp_wavs):
-            mp3_name = real_names[idx] # Use the nice name we generated earlier
+            mp3_name = real_names[idx] 
             await convert_wav_to_mp3_padded(wav, mp3_name, total_duration)
             if os.path.exists(mp3_name):
                 final_files.append(discord.File(mp3_name))
@@ -279,7 +287,6 @@ async def finished_callback(sink, dest_channel, *args):
         else:
             await dest_channel.send("No audio recorded.")
 
-    # Cleanup All Temp Files
     for f in temp_wavs:
         if os.path.exists(f): os.remove(f)
     for f in final_files:
@@ -290,7 +297,7 @@ async def finished_callback(sink, dest_channel, *args):
 @bot.event
 async def on_ready():
     print(f'Logged in as "{bot.user.name}"')
-    print("✅ Nuclear Patch v17 (Safe Merge) Active.")
+    print("✅ Nuclear Patch v18 (Safe Merge Fix) Active.")
 
 @bot.command()
 async def help(ctx):
