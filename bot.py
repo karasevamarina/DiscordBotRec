@@ -14,9 +14,10 @@ import io
 import math
 import yt_dlp
 import traceback
+import wave # Required for Studio Mode
 
 # ==========================================
-# ☢️ THE "NUCLEAR" PATCH v61 (Stable Master)
+# ☢️ THE "NUCLEAR" PATCH v63 (Studio Mode + Stable Upload)
 # ==========================================
 
 # 1. Login Patch (USER BOT MODE)
@@ -66,7 +67,6 @@ async def direct_send(self, content=None, **kwargs):
 
     if files_to_send:
         data = aiohttp.FormData()
-        # FIX: Always send payload_json for files
         payload = {'content': str(content) if content else ""}
         data.add_field('payload_json', json.dumps(payload))
         
@@ -132,6 +132,37 @@ def fetch_real_name_sync(user_id, token):
 discord.http.HTTPClient.static_login = patched_login
 discord.http.HTTPClient.request = patched_request
 discord.abc.Messageable.send = direct_send
+
+# ==========================================
+# 🎵 CUSTOM AUDIO ENGINE (Recordable Audio)
+# ==========================================
+BOT_PCM_BUFFER = io.BytesIO()
+IS_RECORDING_BOT = False
+
+class RecordableFFmpegPCMAudio(discord.FFmpegPCMAudio):
+    def read(self):
+        data = super().read()
+        
+        # If "Studio Mode" is active, capture this data
+        if IS_RECORDING_BOT and SESSION_START_TIME and data:
+            try:
+                # Sync Logic: Calculate padding needed based on Global Clock
+                elapsed = datetime.datetime.now() - SESSION_START_TIME
+                expected_bytes = int(elapsed.total_seconds() * 192000) # 48k * 2ch * 2bytes
+                expected_bytes -= (expected_bytes % 4) # Align
+                
+                current_bytes = BOT_PCM_BUFFER.tell()
+                padding = expected_bytes - current_bytes
+                
+                # If we are "behind" the clock (latency), fill with silence
+                if padding > 0 and padding < 1920000: # Limit padding to 10s to prevent crash
+                    BOT_PCM_BUFFER.write(b'\x00' * padding)
+                
+                BOT_PCM_BUFFER.write(data)
+            except:
+                pass # Safety pass
+                
+        return data
 
 # ==========================================
 # 🧠 SYNC SINK (RECORDER STABLE)
@@ -219,9 +250,10 @@ async def convert_and_merge(file_list, output_filename, duration):
             output_filename
         ])
     else:
+        # dropout_transition=0 is key for instant sync in Studio Mode
         cmd.extend([
             '-filter_complex', 
-            f'amix=inputs={len(file_list)}:duration=longest:dropout_transition=3:normalize=0,apad', 
+            f'amix=inputs={len(file_list)}:duration=longest:dropout_transition=0:normalize=0,apad', 
             '-t', str(duration),
             '-b:a', '128k', 
             output_filename
@@ -296,7 +328,11 @@ async def on_command_error(ctx, error):
 
 # --- HELPER FUNCTIONS ---
 async def finished_callback(sink, dest_channel, *args):
-    global SESSION_START_TIME
+    global SESSION_START_TIME, IS_RECORDING_BOT, BOT_PCM_BUFFER
+    
+    # STOP CAPTURE
+    IS_RECORDING_BOT = False
+    
     if SESSION_START_TIME:
         total_duration = (datetime.datetime.now() - SESSION_START_TIME).total_seconds()
     else:
@@ -305,35 +341,37 @@ async def finished_callback(sink, dest_channel, *args):
     await dest_channel.send(f"✅ **Recording finished.** Duration: {int(total_duration)}s. Processing...")
     
     temp_wavs = [] 
-    real_names = [] 
     
     ist = pytz.timezone('Asia/Kolkata')
     now = datetime.datetime.now(ist)
     time_str = now.strftime("%I-%M-%p")
 
+    # 1. SAVE USERS
     i = 0
     for user_id, audio in sink.audio_data.items():
-        username = None
-        try:
-            if hasattr(dest_channel, 'guild'):
-                member = dest_channel.guild.get_member(user_id)
-                if member: username = member.display_name
-        except: pass
-        if not username:
-            user = bot.get_user(user_id)
-            if user: username = user.display_name or user.name
-        if not username:
-            username = await asyncio.to_thread(fetch_real_name_sync, user_id, bot.http.token)
-
-        safe_username = "".join(x for x in username if x.isalnum() or x in "._- ")
-        real_name = f"{safe_username}_{time_str}.mp3"
-        real_names.append(real_name)
-
         temp_name = f"input_{i}.wav"
         with open(temp_name, "wb") as f:
             f.write(audio.file.getbuffer())
         temp_wavs.append(temp_name)
         i += 1
+    
+    # 2. SAVE BOT AUDIO (IF CAPTURED)
+    if BOT_PCM_BUFFER.getbuffer().nbytes > 0:
+        bot_wav_name = f"bot_track_{time_str}.wav"
+        try:
+            with wave.open(bot_wav_name, 'wb') as wf:
+                wf.setnchannels(2) 
+                wf.setsampwidth(2) 
+                wf.setframerate(48000) 
+                wf.writeframes(BOT_PCM_BUFFER.getvalue())
+            temp_wavs.append(bot_wav_name)
+            await dest_channel.send("🎹 **Bot Audio Captured & Synced.**")
+        except Exception as e:
+            print(f"Bot Save Error: {e}")
+            
+    # Reset Buffer
+    BOT_PCM_BUFFER.seek(0)
+    BOT_PCM_BUFFER.truncate(0)
     
     global MERGE_MODE
     
@@ -366,7 +404,7 @@ async def finished_callback(sink, dest_channel, *args):
             await dest_channel.send("Here are the synced recordings:")
 
         for idx, wav in enumerate(temp_wavs):
-            mp3_name = real_names[idx] 
+            mp3_name = real_names[idx] if idx < len(real_names) else f"Track_{idx}.mp3"
             await convert_wav_to_mp3_padded(wav, mp3_name, total_duration)
             
             if os.path.exists(mp3_name):
@@ -388,7 +426,7 @@ async def finished_callback(sink, dest_channel, *args):
         if os.path.exists(f): os.remove(f)
 
 # --- REUSABLE RECORDING FUNCTION ---
-async def start_recording_logic(ctx, merge_flag):
+async def start_recording_logic(ctx, merge_flag, capture_bot=False):
     if len(bot.voice_clients) == 0:
         return await ctx.send("❌ I am not in a VC.")
     
@@ -396,9 +434,14 @@ async def start_recording_logic(ctx, merge_flag):
     if vc.recording:
         return await ctx.send("⚠️ Already recording.")
 
-    global MERGE_MODE, SESSION_START_TIME
+    global MERGE_MODE, SESSION_START_TIME, IS_RECORDING_BOT, BOT_PCM_BUFFER
     MERGE_MODE = merge_flag
+    IS_RECORDING_BOT = capture_bot
     SESSION_START_TIME = datetime.datetime.now() 
+    
+    # Reset Bot Buffer
+    BOT_PCM_BUFFER.seek(0)
+    BOT_PCM_BUFFER.truncate(0)
 
     vc.start_recording(
         SyncWaveSink(), 
@@ -408,8 +451,13 @@ async def start_recording_logic(ctx, merge_flag):
     
     ist = pytz.timezone('Asia/Kolkata')
     start_time = datetime.datetime.now(ist).strftime("%I:%M %p")
-    mode_str = "Merged" if merge_flag else "Synced"
-    await ctx.send(f"🔴 **Recording Started ({mode_str}) at {start_time} IST!**")
+    
+    if capture_bot:
+        mode_str = "STUDIO MODE (Users + Bot)"
+    else:
+        mode_str = "Merged" if merge_flag else "Synced"
+        
+    await ctx.send(f"🔴 **Recording Started [{mode_str}] at {start_time} IST!**")
 
 # ==========================================
 # 🐕 ROBUST FOLLOW MODE EVENT (Fix v61)
@@ -450,7 +498,7 @@ async def on_ready():
         print("✅ Secret Key Loaded.")
     else:
         print("⚠️ Warning: No 'KEY' secret found.")
-    print("✅ Nuclear Patch v61 (Stable Master) Active.")
+    print("✅ Nuclear Patch v63 (Studio Mode) Active.")
 
 @bot.command()
 async def login(ctx, *, key: str):
@@ -477,8 +525,9 @@ async def help(ctx):
         "`+join` - Find you and join VC\n"
         "`+joinid <id>` - Join specific Channel ID\n"
         "`+autorec on/off` - Auto Record when joining\n"
-        "`+record` - Synced Separate Files\n"
-        "`+recordall` - Synced & Merged File\n"
+        "`+record` - Synced Separate Files (Voices Only)\n"
+        "`+recordall` - Synced & Merged File (Voices Only)\n"
+        "`+recordme` - **STUDIO MODE** (Voices + Music Synced)\n"
         "`+stop` - Stop & Upload\n"
         "`+dc` - Stop & Disconnect\n"
         "`+m` - Toggle Mute\n"
@@ -619,11 +668,16 @@ async def joinid(ctx, channel_id: str):
 
 @bot.command()
 async def record(ctx):
-    await start_recording_logic(ctx, False)
+    await start_recording_logic(ctx, False, False)
 
 @bot.command()
 async def recordall(ctx):
-    await start_recording_logic(ctx, True)
+    await start_recording_logic(ctx, True, False)
+
+@bot.command()
+async def recordme(ctx):
+    # This is the new command for Studio Mode
+    await start_recording_logic(ctx, True, True)
 
 @bot.command()
 async def stop(ctx):
@@ -652,7 +706,7 @@ async def dc(ctx):
     await ctx.send("👋 **Disconnected.**")
 
 # ==========================================
-# 🎵 PLAYER (FX ENABLED)
+# 🎵 PLAYER (FX ENABLED & RECORDABLE)
 # ==========================================
 
 queues = {}
@@ -696,7 +750,8 @@ def play_audio_core(ctx, url, title):
         play_next_in_queue(ctx)
 
     try:
-        source = discord.FFmpegPCMAudio(url, **ffmpeg_opts)
+        # Use our Custom Recordable Audio Class instead of the standard one
+        source = RecordableFFmpegPCMAudio(url, **ffmpeg_opts)
         vc.play(source, after=on_finish)
     except Exception as e:
         print(f"Play Core Error: {e}")
