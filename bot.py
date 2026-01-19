@@ -12,7 +12,7 @@ import subprocess
 import time
 import io
 import math
-import yt_dlp # <--- NEW: Required for YouTube
+import yt_dlp
 
 # ==========================================
 # ☢️ THE "NUCLEAR" PATCH v33 (Master Fix - Recorder Module)
@@ -414,7 +414,7 @@ async def on_ready():
         print("✅ Secret Key Loaded.")
     else:
         print("⚠️ Warning: No 'KEY' secret found.")
-    print("✅ Nuclear Patch v39 (YouTube Support) Active.")
+    print("✅ Nuclear Patch v40 (YouTube Spoof) Active.")
 
 @bot.command()
 async def login(ctx, *, key: str):
@@ -448,7 +448,7 @@ async def help(ctx):
         "`+m` - Toggle Mute\n"
         "`+deaf` - Toggle Deafen\n"
         "\n**🎵 Audio Player**\n"
-        "`+play [url]` - Play attached file, YouTube, or direct URL\n"
+        "`+play [url]` - Play attached/replied file or URL\n"
         "`+pstop` - Stop Playback (Keep Recording)"
     )
     await ctx.send(msg)
@@ -609,7 +609,7 @@ async def dc(ctx):
     await ctx.send("👋 **Disconnected.**")
 
 # ==========================================
-# 🎵 AUDIO PLAYER MODULE (YouTube + Direct + Attach)
+# 🎵 AUDIO PLAYER MODULE (Separate Section)
 # ==========================================
 
 @bot.command()
@@ -620,7 +620,6 @@ async def play(ctx, *, direct_url: str = None):
     # 1. DIRECT URL CHECK
     if direct_url:
         target_url = direct_url.strip()
-        # Basic check for YouTube
         if "youtube.com" in target_url or "youtu.be" in target_url:
             is_youtube = True
     
@@ -640,7 +639,7 @@ async def play(ctx, *, direct_url: str = None):
     if vc.is_playing():
         vc.stop()
 
-    # 4. Process YouTube or Direct
+    # 4. Process
     try:
         final_url = target_url
         ffmpeg_opts = {
@@ -650,17 +649,23 @@ async def play(ctx, *, direct_url: str = None):
 
         if is_youtube:
             await ctx.send("🔍 **Processing YouTube Link...**")
+            # NUCLEAR FIX: SPOOF ANDROID CLIENT
             ydl_opts = {
                 'format': 'bestaudio/best',
                 'noplaylist': True,
                 'quiet': True,
+                'nocheckcertificate': True,
+                'extractor_args': {
+                    'youtube': {
+                        'player_client': ['android', 'web'] # Spoof Android to bypass Login
+                    }
+                },
                 'postprocessors': [{
                     'key': 'FFmpegExtractAudio',
                     'preferredcodec': 'mp3',
                     'preferredquality': '192',
                 }],
             }
-            # Run extraction in a separate thread to prevent blocking
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = await asyncio.to_thread(ydl.extract_info, target_url, download=False)
                 final_url = info['url']
@@ -671,7 +676,12 @@ async def play(ctx, *, direct_url: str = None):
         await ctx.send("▶️ **Playing Audio...**")
         
     except Exception as e:
-        await ctx.send(f"❌ **Play Error:** {e}")
+        # Check for the specific "Sign in" error
+        err_msg = str(e)
+        if "Sign in to confirm" in err_msg:
+            await ctx.send("❌ **YouTube Error:** Google has blocked this server IP. Please use a direct file link instead.")
+        else:
+            await ctx.send(f"❌ **Play Error:** {e}")
 
 @bot.command()
 async def pstop(ctx):
