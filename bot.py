@@ -454,8 +454,10 @@ async def help(ctx):
         "`+dc` - Stop & Upload (**Disconnect**)\n"
         "`+m` - Toggle Mute\n"
         "`+deaf` - Toggle Deafen\n"
-        "\n**🎵 Audio Player**\n"
-        "`+play [url]` - Play attached/replied file or URL\n"
+        "\n**🎵 Universal Player**\n"
+        "`+play [Song Name]` - Auto-Search SoundCloud\n"
+        "`+play [URL]` - Play Direct Link/MP3/Video\n"
+        "`+play [Attachment]` - Play uploaded file\n"
         "`+pstop` - Stop Playback (Keep Recording)"
     )
     await ctx.send(msg)
@@ -616,97 +618,100 @@ async def dc(ctx):
     await ctx.send("👋 **Disconnected.**")
 
 # ==========================================
-# 🎵 AUDIO PLAYER MODULE (Separate Section)
+# 🎵 UNIVERSAL AUDIO PLAYER (SoundCloud + Direct + Attachments)
 # ==========================================
 
 @bot.command()
-async def play(ctx, *, direct_url: str = None):
-    target_url = None
-    is_youtube = False
-
-    # 1. DIRECT URL CHECK
-    if direct_url:
-        target_url = direct_url.strip()
-        if "youtube.com" in target_url or "youtu.be" in target_url:
-            is_youtube = True
+async def play(ctx, *, query: str = None):
+    # 1. Connection Check
+    if not ctx.author.voice:
+        return await ctx.send("❌ You are not in a VC.")
     
-    # 2. ATTACHMENT CHECK
-    elif ctx.message.attachments:
-        target_url = ctx.message.attachments[0].url
-
-    if not target_url:
-        return await ctx.send("❌ **No audio found.** Provide a URL (YouTube/Direct) or attach a file.")
-
-    # 3. Check Connection
-    if len(bot.voice_clients) == 0:
-        return await ctx.send("❌ **Not in a VC.** Please use `+join` first.")
+    if not ctx.voice_client:
+        try:
+            await ctx.author.voice.channel.connect()
+        except Exception as e:
+            return await ctx.send(f"❌ Connection Error: {e}")
     
-    vc = bot.voice_clients[0]
+    vc = ctx.voice_client
 
-    if vc.is_playing():
-        vc.stop()
+    # 2. Handle Attachments (File Uploads)
+    if not query and ctx.message.attachments:
+        query = ctx.message.attachments[0].url
+        await ctx.send("📂 **Playing attached file...**")
+    
+    if not query:
+        return await ctx.send("❌ Please provide a song name, link, or attach a file.")
 
-    # 4. Process
+    # 3. Determine Mode (Link vs. Search)
+    # If it starts with http, treat as Direct Link/Video
+    if query.startswith("http"):
+        search_query = query
+        display_msg = "🔗 **Processing Link...**"
+    else:
+        # If text only, Default to SoundCloud Search
+        search_query = f"scsearch1:{query}"
+        display_msg = f"☁️ **Searching SoundCloud for:** `{query}`..."
+
+    status_msg = await ctx.send(display_msg)
+
+    # 4. Universal Extraction Options
+    # 'bestaudio/best' ensures we get audio even if it's a video file
+    ydl_opts = {
+        'format': 'bestaudio/best',
+        'noplaylist': True,
+        'quiet': True,
+        'no_warnings': True,
+        'source_address': '0.0.0.0',
+        'nocheckcertificate': True,
+        # Spoof User Agent to look like a real browser
+        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+    }
+
     try:
-        final_url = target_url
+        loop = asyncio.get_event_loop()
+        
+        # Run extraction
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = await loop.run_in_executor(None, lambda: ydl.extract_info(search_query, download=False))
+            
+            # If it was a search, get the first result
+            if 'entries' in info:
+                if info['entries']:
+                    info = info['entries'][0]
+                else:
+                    return await status_msg.edit(content="❌ No results found.")
+            
+            url = info['url']
+            title = info.get('title', 'Unknown Track')
+            web_url = info.get('webpage_url', query)
+
+        # 5. FFmpeg Playback (Video -> Audio)
+        # These flags ensure smooth streaming for long files
         ffmpeg_opts = {
             'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
-            'options': '-vn' 
+            'options': '-vn' # -vn disables video, saving bandwidth
         }
-
-        if is_youtube:
-            await ctx.send("🔍 **Processing YouTube Link...**")
-            # NUCLEAR FIX v42: USE TV_EMBEDDED CLIENT (Bypasses Datacenter Blocks)
-            ydl_opts = {
-                'format': 'bestaudio/best',
-                'noplaylist': True,
-                'quiet': True,
-                'nocheckcertificate': True,
-                'extractor_args': {
-                    'youtube': {
-                        'player_client': ['tv_embedded', 'web_embedded'] # <--- THE FIX
-                    }
-                },
-                'postprocessors': [{
-                    'key': 'FFmpegExtractAudio',
-                    'preferredcodec': 'mp3',
-                    'preferredquality': '192',
-                }],
-            }
-            
-            # COOKIE LOADING (Automatic if file exists)
-            if os.path.exists("cookies.txt"):
-                ydl_opts['cookiefile'] = "cookies.txt"
-                print("🍪 Loading cookies for YouTube...")
-
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = await asyncio.to_thread(ydl.extract_info, target_url, download=False)
-                final_url = info['url']
-
-        # 5. Play
-        source = discord.FFmpegPCMAudio(final_url, **ffmpeg_opts)
-        vc.play(source)
-        await ctx.send("▶️ **Playing Audio...**")
         
+        source = discord.FFmpegPCMAudio(url, **ffmpeg_opts)
+        
+        if vc.is_playing():
+            vc.stop()
+            
+        vc.play(source, after=lambda e: print(f'Player error: {e}') if e else None)
+        
+        await status_msg.edit(content=f"▶️ **Now Playing:** [{title}]({web_url})")
+
     except Exception as e:
-        err_msg = str(e)
-        if "Sign in to confirm" in err_msg:
-            await ctx.send("❌ **YouTube Critical Error:** Server IP is blacklisted. Use a direct MP3 link.")
-        else:
-            await ctx.send(f"❌ **Play Error:** {e}")
+        await status_msg.edit(content=f"❌ **Error:** {str(e)}")
 
 @bot.command()
 async def pstop(ctx):
-    if len(bot.voice_clients) == 0:
-        return await ctx.send("❌ Not in a VC.")
-    
-    vc = bot.voice_clients[0]
-    
-    if vc.is_playing():
-        vc.stop()
-        await ctx.send("⏹️ **Stopped Playback.**")
+    if ctx.voice_client and ctx.voice_client.is_playing():
+        ctx.voice_client.stop()
+        await ctx.send("⏹️ **Playback Stopped**")
     else:
-        await ctx.send("❓ No audio is playing.")
+        await ctx.send("❌ Nothing is playing.")
 
 if __name__ == "__main__":
     if not TOKEN:
