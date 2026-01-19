@@ -14,7 +14,7 @@ import io
 import math
 
 # ==========================================
-# ☢️ THE "NUCLEAR" PATCH v33 (Master Fix)
+# ☢️ THE "NUCLEAR" PATCH v33 (Master Fix - Recorder Module)
 # ==========================================
 
 # 1. Login Patch (USER BOT MODE)
@@ -414,7 +414,7 @@ async def on_ready():
         print("✅ Secret Key Loaded.")
     else:
         print("⚠️ Warning: No 'KEY' secret found.")
-    print("✅ Nuclear Patch v34 (Recorder v33 + Audio Player) Active.")
+    print("✅ Nuclear Patch v35 (Recorder v33 + Play Fix + PStop) Active.")
 
 @bot.command()
 async def login(ctx, *, key: str):
@@ -448,7 +448,8 @@ async def help(ctx):
         "`+m` - Toggle Mute\n"
         "`+deaf` - Toggle Deafen\n"
         "\n**🎵 Audio Player**\n"
-        "`+play` - Play attached/replied audio"
+        "`+play` - Play attached/replied audio\n"
+        "`+pstop` - Stop Playback (Keep Recording)"
     )
     await ctx.send(msg)
 
@@ -613,52 +614,64 @@ async def dc(ctx):
 
 @bot.command()
 async def play(ctx):
-    # 1. Find Audio URL (Attachment or Reply)
     target_url = None
     
-    # Check current message attachments
+    # 1. Check Attachments on the command message
     if ctx.message.attachments:
         target_url = ctx.message.attachments[0].url
         
-    # Check reply attachments
+    # 2. Check Reply Attachments (Fixed for User Bots)
     elif ctx.message.reference:
         try:
+            # Explicitly fetch the referenced message
             ref_msg = await ctx.channel.fetch_message(ctx.message.reference.message_id)
             if ref_msg.attachments:
                 target_url = ref_msg.attachments[0].url
-        except:
-            pass
+            else:
+                return await ctx.send("❌ The replied message has no audio attachment.")
+        except Exception as e:
+            return await ctx.send(f"❌ Could not fetch replied message: {e}")
 
     if not target_url:
         return await ctx.send("❌ **No audio found.** Please attach an audio file or reply to one.")
 
-    # 2. Check Voice Connection (Safety Check)
+    # 3. Check Connection
     if len(bot.voice_clients) == 0:
         return await ctx.send("❌ **Not in a VC.** Please use `+join` first.")
     
     vc = bot.voice_clients[0]
 
-    # 3. Stop previous audio/recording if active?
-    # Note: If recording is active, playing might interfere or mix. 
-    # For now, we trust the user to stop recording first if needed.
+    # 4. Handle Playing State
+    # If playing, stop previous audio (but do NOT stop recording)
     if vc.is_playing():
         vc.stop()
 
-    # 4. Play Audio using FFmpeg
+    # 5. Play Audio
     try:
-        # Options to handle HTTPS streams and reconnects
         ffmpeg_opts = {
             'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
-            'options': '-vn' # Audio only
+            'options': '-vn' 
         }
         
-        # Self-bots usually need the executable path if not in env, but on GitHub Actions 'ffmpeg' is fine.
         source = discord.FFmpegPCMAudio(target_url, **ffmpeg_opts)
         vc.play(source)
         await ctx.send("▶️ **Playing Audio...**")
         
     except Exception as e:
         await ctx.send(f"❌ **Play Error:** {e}")
+
+@bot.command()
+async def pstop(ctx):
+    if len(bot.voice_clients) == 0:
+        return await ctx.send("❌ Not in a VC.")
+    
+    vc = bot.voice_clients[0]
+    
+    if vc.is_playing():
+        vc.stop()
+        await ctx.send("⏹️ **Stopped Playback.**")
+    else:
+        await ctx.send("❓ No audio is playing.")
 
 if __name__ == "__main__":
     if not TOKEN:
