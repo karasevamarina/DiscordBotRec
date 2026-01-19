@@ -619,65 +619,98 @@ async def dc(ctx):
     await ctx.send("👋 **Disconnected.**")
 
 # ==========================================
-# 🎵 HYBRID AUDIO PLAYER (v38 Enhanced)
+# 🎵 HYBRID AUDIO PLAYER (Enhanced with Callbacks)
 # ==========================================
 
 @bot.command()
 async def play(ctx, *, query: str = None):
-    target_url = None
-    is_search = False
-
-    # 1. ATTACHMENT CHECK (Priority 1)
-    if ctx.message.attachments:
-        target_url = ctx.message.attachments[0].url
-        await ctx.send("📂 **Playing attached file...**")
-
-    # 2. REPLY CHECK (Priority 2 - Kept from original v38)
-    elif ctx.message.reference:
-        ref = ctx.message.reference
-        if ref.cached_message and ref.cached_message.attachments:
-            target_url = ref.cached_message.attachments[0].url
-        if not target_url:
-            try:
-                ref_msg = await ctx.channel.fetch_message(ref.message_id)
-                if ref_msg.attachments:
-                    target_url = ref_msg.attachments[0].url
-            except: pass
-        if not target_url:
-            try:
-                cid = ref.channel_id if ref.channel_id else ctx.channel.id
-                url = f"https://discord.com/api/v9/channels/{cid}/messages/{ref.message_id}"
-                header = {"Authorization": bot.http.token}
-                async with bot.http._HTTPClient__session.get(url, headers=header) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        if 'attachments' in data and len(data['attachments']) > 0:
-                            target_url = data['attachments'][0]['url']
-            except: pass
-
-    # 3. DIRECT URL CHECK (Priority 3)
-    elif query and (query.startswith("http") or query.startswith("www")):
-        target_url = query.strip()
-        await ctx.send("🔗 **Playing Direct Link...**")
-
-    # 4. SEARCH QUERY (Priority 4)
-    elif query:
-        is_search = True
-        await ctx.send(f"☁️ **Searching SoundCloud for:** `{query}`...")
-
-    else:
-        return await ctx.send("❌ **No audio found.** Provide a URL, name, or file.")
-
-    # 5. SIMPLE CONNECTION CHECK (Like v38)
-    if len(bot.voice_clients) == 0:
-        return await ctx.send("❌ **Not in a VC.** Please use `+join` first.")
-    
-    vc = bot.voice_clients[0]
-
-    if vc.is_playing():
-        vc.stop()
-
+    # CRITICAL: Error handling wrap
     try:
+        # 1. SIMPLE CONNECTION CHECK (Like v38)
+        # We assume you used +join already. This avoids the "User" vs "Member" crash.
+        if len(bot.voice_clients) == 0:
+             return await ctx.send("❌ **Not in a VC.** Please use `+join` first.")
+        
+        vc = bot.voice_clients[0]
+
+        # 2. SOURCE DETERMINATION
+        target_url = None
+        title = "Unknown Track"
+        is_search = False
+
+        # A. Attachment?
+        if ctx.message.attachments:
+            target_url = ctx.message.attachments[0].url
+            title = ctx.message.attachments[0].filename
+            await ctx.send("📂 **Processing attached file...**")
+
+        # B. Reply? (Priority 2 - Kept from original v38)
+        elif ctx.message.reference:
+            ref = ctx.message.reference
+            if ref.cached_message and ref.cached_message.attachments:
+                target_url = ref.cached_message.attachments[0].url
+                title = ref.cached_message.attachments[0].filename
+            
+            if not target_url:
+                try:
+                    ref_msg = await ctx.channel.fetch_message(ref.message_id)
+                    if ref_msg.attachments:
+                        target_url = ref_msg.attachments[0].url
+                        title = ref_msg.attachments[0].filename
+                except: pass
+            
+            # Layer 3: Raw HTTP Extraction (Nuclear)
+            if not target_url:
+                try:
+                    cid = ref.channel_id if ref.channel_id else ctx.channel.id
+                    url = f"https://discord.com/api/v9/channels/{cid}/messages/{ref.message_id}"
+                    header = {"Authorization": bot.http.token}
+                    async with bot.http._HTTPClient__session.get(url, headers=header) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            if 'attachments' in data and len(data['attachments']) > 0:
+                                target_url = data['attachments'][0]['url']
+                                title = data['attachments'][0]['filename']
+                except: pass
+            
+            if target_url:
+                 await ctx.send("↩️ **Playing Replied Audio...**")
+
+        # C. Direct Link? (starts with http)
+        elif query and (query.startswith("http") or query.startswith("www")):
+            target_url = query.strip()
+            # Try to get a clean filename from the URL for the display title
+            try:
+                # Splits by / and takes last part, then splits by ? to remove query params
+                title = target_url.split("/")[-1].split("?")[0]
+                if len(title) > 50 or "." not in title: title = "Direct Link"
+            except:
+                title = "Direct Link"
+            await ctx.send("🔗 **Processing Direct Link...**")
+
+        # D. Search Query? (Text)
+        elif query:
+            is_search = True
+            await ctx.send(f"☁️ **Searching SoundCloud for:** `{query}`...")
+        
+        else:
+            return await ctx.send("❌ **No audio found.** Provide a URL, name, or file.")
+
+        if vc.is_playing():
+            vc.stop()
+
+        # 3. DEFINE CALLBACK FOR "FINISHED" MESSAGE
+        # This runs when the audio stops.
+        def after_playing(error):
+            if error:
+                print(f"Player Error: {error}")
+            
+            # We use run_coroutine_threadsafe because 'after' is not async, 
+            # but ctx.send IS async.
+            coro = ctx.send(f"✅ **Audio finished:** {title}")
+            asyncio.run_coroutine_threadsafe(coro, bot.loop)
+
+        # 4. PLAYBACK PREP
         ffmpeg_opts = {
             'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
             'options': '-vn' # Ignores video tracks (Safe for mp4/mov/etc)
@@ -699,14 +732,17 @@ async def play(ctx, *, query: str = None):
                 info = await loop.run_in_executor(None, lambda: ydl.extract_info(f"scsearch1:{query}", download=False))
                 if 'entries' in info and info['entries']:
                     target_url = info['entries'][0]['url'] # The direct stream URL
-                    title = info['entries'][0].get('title', 'Unknown')
-                    await ctx.send(f"▶️ **Now Playing:** {title}")
+                    title = info['entries'][0].get('title', 'Unknown Track')
                 else:
                     return await ctx.send("❌ No results found on SoundCloud.")
 
         # --- PLAY IT (Used for everything now) ---
         source = discord.FFmpegPCMAudio(target_url, **ffmpeg_opts)
-        vc.play(source)
+        
+        # Send "Now Playing" before starting
+        await ctx.send(f"▶️ **Now Playing:** {title}")
+        
+        vc.play(source, after=after_playing)
 
     except Exception as e:
         await ctx.send(f"❌ **Play Error:** {e}")
