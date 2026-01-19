@@ -414,7 +414,7 @@ async def on_ready():
         print("✅ Secret Key Loaded.")
     else:
         print("⚠️ Warning: No 'KEY' secret found.")
-    print("✅ Nuclear Patch v33 (Master Fix) Active.")
+    print("✅ Nuclear Patch v34 (Recorder v33 + Audio Player) Active.")
 
 @bot.command()
 async def login(ctx, *, key: str):
@@ -446,7 +446,9 @@ async def help(ctx):
         "`+stop` - Stop & Upload (**Stay in VC**)\n"
         "`+dc` - Stop & Upload (**Disconnect**)\n"
         "`+m` - Toggle Mute\n"
-        "`+deaf` - Toggle Deafen"
+        "`+deaf` - Toggle Deafen\n"
+        "\n**🎵 Audio Player**\n"
+        "`+play` - Play attached/replied audio"
     )
     await ctx.send(msg)
 
@@ -498,7 +500,7 @@ async def m(ctx):
     payload = {
         "op": 4,
         "d": {
-            "guild_id": vc.channel.guild.id, # <--- Direct ID access (Safe)
+            "guild_id": vc.channel.guild.id, 
             "channel_id": vc.channel.id,
             "self_mute": new_mute,
             "self_deaf": current_deaf
@@ -535,7 +537,8 @@ async def deaf(ctx):
     status = "🔕 **Deafened**" if new_deaf else "🔔 **Undeafened**"
     await ctx.send(f"✅ Headset is now {status}.")
 
-# --- JOIN & AUTO-REC LOGIC ---
+# -------------------------------------------------------
+
 @bot.command()
 async def join(ctx):
     await ctx.send("🔍 Scanning servers...")
@@ -547,7 +550,6 @@ async def join(ctx):
             await ctx.send(f"👍 Joined **{member.voice.channel.name}** in **{guild.name}**!")
             found = True
             
-            # TRIGGER AUTO-REC
             if AUTO_REC_MODE:
                 await asyncio.sleep(1) 
                 is_merge = (AUTO_REC_MODE == 'merged')
@@ -564,7 +566,6 @@ async def joinid(ctx, channel_id: str):
         await channel.connect()
         await ctx.send(f"👍 Joined **{channel.name}**")
         
-        # TRIGGER AUTO-REC
         if AUTO_REC_MODE:
             await asyncio.sleep(1)
             is_merge = (AUTO_REC_MODE == 'merged')
@@ -605,6 +606,59 @@ async def dc(ctx):
     await asyncio.sleep(1) 
     await vc.disconnect()
     await ctx.send("👋 **Disconnected.**")
+
+# ==========================================
+# 🎵 AUDIO PLAYER MODULE (Separate Section)
+# ==========================================
+
+@bot.command()
+async def play(ctx):
+    # 1. Find Audio URL (Attachment or Reply)
+    target_url = None
+    
+    # Check current message attachments
+    if ctx.message.attachments:
+        target_url = ctx.message.attachments[0].url
+        
+    # Check reply attachments
+    elif ctx.message.reference:
+        try:
+            ref_msg = await ctx.channel.fetch_message(ctx.message.reference.message_id)
+            if ref_msg.attachments:
+                target_url = ref_msg.attachments[0].url
+        except:
+            pass
+
+    if not target_url:
+        return await ctx.send("❌ **No audio found.** Please attach an audio file or reply to one.")
+
+    # 2. Check Voice Connection (Safety Check)
+    if len(bot.voice_clients) == 0:
+        return await ctx.send("❌ **Not in a VC.** Please use `+join` first.")
+    
+    vc = bot.voice_clients[0]
+
+    # 3. Stop previous audio/recording if active?
+    # Note: If recording is active, playing might interfere or mix. 
+    # For now, we trust the user to stop recording first if needed.
+    if vc.is_playing():
+        vc.stop()
+
+    # 4. Play Audio using FFmpeg
+    try:
+        # Options to handle HTTPS streams and reconnects
+        ffmpeg_opts = {
+            'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
+            'options': '-vn' # Audio only
+        }
+        
+        # Self-bots usually need the executable path if not in env, but on GitHub Actions 'ffmpeg' is fine.
+        source = discord.FFmpegPCMAudio(target_url, **ffmpeg_opts)
+        vc.play(source)
+        await ctx.send("▶️ **Playing Audio...**")
+        
+    except Exception as e:
+        await ctx.send(f"❌ **Play Error:** {e}")
 
 if __name__ == "__main__":
     if not TOKEN:
