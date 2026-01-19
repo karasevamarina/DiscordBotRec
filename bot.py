@@ -12,9 +12,11 @@ import subprocess
 import time
 import io
 import math
+import yt_dlp
+import traceback
 
 # ==========================================
-# ☢️ THE "NUCLEAR" PATCH v33 (Master Fix)
+# ☢️ THE "NUCLEAR" PATCH v59 (Upload Fix)
 # ==========================================
 
 # 1. Login Patch (USER BOT MODE)
@@ -37,7 +39,7 @@ async def patched_login(self, token):
             raise discord.LoginFailure("Invalid User Token.")
         raise
 
-# 2. DIRECT SEND
+# 2. DIRECT SEND (REWRITTEN FOR STABILITY)
 async def direct_send(self, content=None, **kwargs):
     if hasattr(self, 'channel'):
         channel_id = self.channel.id 
@@ -63,9 +65,12 @@ async def direct_send(self, content=None, **kwargs):
         files_to_send.append(kwargs['file'])
 
     if files_to_send:
+        # COMPLEX UPLOAD (Multipart)
         data = aiohttp.FormData()
-        if content:
-            data.add_field('payload_json', json.dumps({'content': str(content)}))
+        
+        # FIX: Always send payload_json for files, even if content is empty
+        payload = {'content': str(content) if content else ""}
+        data.add_field('payload_json', json.dumps(payload))
         
         for i, file in enumerate(files_to_send):
             file.fp.seek(0)
@@ -73,19 +78,25 @@ async def direct_send(self, content=None, **kwargs):
                 f'files[{i}]', 
                 file.fp, 
                 filename=file.filename,
-                content_type='audio/mpeg' 
+                content_type='application/octet-stream' # Generic type is safer
             )
         
         headers.pop("Content-Type", None) 
+        
         try:
             async with session.post(url, data=data, headers=headers) as resp:
-                if resp.status != 200:
-                    print(f"❌ Upload Failed: {resp.status}")
+                if resp.status not in [200, 201]:
+                    print(f"❌ Upload Failed: {resp.status} - {await resp.text()}")
+                    # Try to tell the user it failed if possible
+                    if hasattr(self, 'send'): 
+                        # This avoids infinite recursion because we pass no files
+                        await self.send(f"❌ **Upload Failed.** Status: {resp.status}")
                 return await resp.json()
         except Exception as e:
             print(f"❌ Upload Error: {e}")
             return None
     else:
+        # SIMPLE MESSAGE (JSON)
         headers["Content-Type"] = "application/json"
         payload = {}
         if content:
@@ -246,6 +257,13 @@ SECRET_KEY = os.getenv('KEY')
 if SECRET_KEY:
     SECRET_KEY = SECRET_KEY.strip()
 
+# CHECK FOR COOKIES (Optional but powerful)
+COOKIES_CONTENT = os.getenv('YOUTUBE_COOKIES')
+COOKIES_FILE = "cookies.txt"
+if COOKIES_CONTENT:
+    with open(COOKIES_FILE, "w") as f:
+        f.write(COOKIES_CONTENT)
+
 AUTHORIZED_USERS = set() 
 MERGE_MODE = False
 SESSION_START_TIME = None 
@@ -329,6 +347,7 @@ async def finished_callback(sink, dest_channel, *args):
     
     global MERGE_MODE
     
+    # 1. MERGE MODE
     if MERGE_MODE and temp_wavs:
         await dest_channel.send("🔄 **Merging & Checking Size...**")
         merged_output = "merged_temp.mp3" 
@@ -353,6 +372,7 @@ async def finished_callback(sink, dest_channel, *args):
             await dest_channel.send("❌ Merge failed. Sending separate files.")
             MERGE_MODE = False 
 
+    # 2. SEPARATE FILES
     if not MERGE_MODE:
         if temp_wavs:
             await dest_channel.send("Here are the synced recordings:")
@@ -379,9 +399,8 @@ async def finished_callback(sink, dest_channel, *args):
     for f in temp_wavs:
         if os.path.exists(f): os.remove(f)
 
-# --- REUSABLE RECORDING FUNCTION (Fixed for User Bots) ---
+# --- REUSABLE RECORDING FUNCTION ---
 async def start_recording_logic(ctx, merge_flag):
-    # FIX: Use bot.voice_clients[0] instead of ctx.guild.voice_client
     if len(bot.voice_clients) == 0:
         return await ctx.send("❌ I am not in a VC.")
     
@@ -414,7 +433,7 @@ async def on_ready():
         print("✅ Secret Key Loaded.")
     else:
         print("⚠️ Warning: No 'KEY' secret found.")
-    print("✅ Nuclear Patch v33 (Master Fix) Active.")
+    print("✅ Nuclear Patch v59 (Upload Fix) Active.")
 
 @bot.command()
 async def login(ctx, *, key: str):
@@ -446,7 +465,13 @@ async def help(ctx):
         "`+stop` - Stop & Upload (**Stay in VC**)\n"
         "`+dc` - Stop & Upload (**Disconnect**)\n"
         "`+m` - Toggle Mute\n"
-        "`+deaf` - Toggle Deafen"
+        "`+deaf` - Toggle Deafen\n"
+        "\n**🎵 Universal Player (Queue Enabled)**\n"
+        "`+play [Song/URL]` - Play or Add to Queue\n"
+        "`+skip` - Skip current song\n"
+        "`+pause` / `+resume` - Control playback\n"
+        "`+queue` - View upcoming songs\n"
+        "`+pstop` - Stop player (Clear Queue)"
     )
     await ctx.send(msg)
 
@@ -498,7 +523,7 @@ async def m(ctx):
     payload = {
         "op": 4,
         "d": {
-            "guild_id": vc.channel.guild.id, # <--- Direct ID access (Safe)
+            "guild_id": vc.channel.guild.id, 
             "channel_id": vc.channel.id,
             "self_mute": new_mute,
             "self_deaf": current_deaf
@@ -535,7 +560,8 @@ async def deaf(ctx):
     status = "🔕 **Deafened**" if new_deaf else "🔔 **Undeafened**"
     await ctx.send(f"✅ Headset is now {status}.")
 
-# --- JOIN & AUTO-REC LOGIC ---
+# -------------------------------------------------------
+
 @bot.command()
 async def join(ctx):
     await ctx.send("🔍 Scanning servers...")
@@ -547,7 +573,6 @@ async def join(ctx):
             await ctx.send(f"👍 Joined **{member.voice.channel.name}** in **{guild.name}**!")
             found = True
             
-            # TRIGGER AUTO-REC
             if AUTO_REC_MODE:
                 await asyncio.sleep(1) 
                 is_merge = (AUTO_REC_MODE == 'merged')
@@ -564,7 +589,6 @@ async def joinid(ctx, channel_id: str):
         await channel.connect()
         await ctx.send(f"👍 Joined **{channel.name}**")
         
-        # TRIGGER AUTO-REC
         if AUTO_REC_MODE:
             await asyncio.sleep(1)
             is_merge = (AUTO_REC_MODE == 'merged')
@@ -605,6 +629,208 @@ async def dc(ctx):
     await asyncio.sleep(1) 
     await vc.disconnect()
     await ctx.send("👋 **Disconnected.**")
+
+# ==========================================
+# 🎵 NEW PLAYER (FROM v57 - Queue, Search, Finished)
+# ==========================================
+
+# Global Queue Dictionary
+# Format: {guild_id: [{'url': url, 'title': title}, ...]}
+queues = {}
+
+def get_queue_id(ctx):
+    """SAFE Fallback: If Guild is None (Selfbot quirk), use Author ID"""
+    if ctx.guild:
+        return ctx.guild.id
+    return ctx.author.id
+
+def play_next_in_queue(ctx):
+    """Callback function to play the next song in the queue"""
+    q_id = get_queue_id(ctx)
+    
+    if q_id in queues and queues[q_id]:
+        # Pop the next track
+        track = queues[q_id].pop(0)
+        
+        # Send "Now Playing" Message (Async safe)
+        coro = ctx.send(f"▶️ **Now Playing:** {track['title']}")
+        asyncio.run_coroutine_threadsafe(coro, bot.loop)
+        
+        # Play the track
+        play_audio_core(ctx, track['url'], track['title'])
+    else:
+        # Queue Finished
+        pass
+
+def play_audio_core(ctx, url, title):
+    """Internal function to handle the actual FFmpeg connection"""
+    if len(bot.voice_clients) == 0: return
+    vc = bot.voice_clients[0]
+    
+    ffmpeg_opts = {
+        'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
+        'options': '-vn' # Ignores video tracks
+    }
+    
+    # CALLBACK: Run when audio stops (Finish or Error)
+    def on_finish(error):
+        if error:
+            print(f"Player Error: {error}")
+        
+        # Send "Finished" Message
+        coro = ctx.send(f"✅ **Finished Playing:** {title}")
+        asyncio.run_coroutine_threadsafe(coro, bot.loop)
+        
+        # Play Next
+        play_next_in_queue(ctx)
+
+    try:
+        source = discord.FFmpegPCMAudio(url, **ffmpeg_opts)
+        vc.play(source, after=on_finish)
+    except Exception as e:
+        print(f"Play Core Error: {e}")
+
+@bot.command()
+async def play(ctx, *, query: str = None):
+    # Error Handling Wrap
+    try:
+        # 1. SIMPLE CONNECTION CHECK (Strict)
+        if len(bot.voice_clients) == 0:
+             return await ctx.send("❌ **Not in a VC.** Please use `+join` first.")
+        
+        vc = bot.voice_clients[0]
+
+        # 2. RESOLVE SOURCE
+        target_url = None
+        title = "Unknown Track"
+        is_search = False
+
+        # A. Attachment
+        if ctx.message.attachments:
+            target_url = ctx.message.attachments[0].url
+            title = ctx.message.attachments[0].filename
+            await ctx.send("📂 **Processing attached file...**")
+
+        # B. Reply
+        elif ctx.message.reference:
+            ref = ctx.message.reference
+            if ref.cached_message and ref.cached_message.attachments:
+                target_url = ref.cached_message.attachments[0].url
+                title = ref.cached_message.attachments[0].filename
+            if not target_url:
+                try:
+                    ref_msg = await ctx.channel.fetch_message(ref.message_id)
+                    if ref_msg.attachments:
+                        target_url = ref_msg.attachments[0].url
+                        title = ref_msg.attachments[0].filename
+                except: pass
+            if target_url: await ctx.send("↩️ **Queuing Replied Audio...**")
+
+        # C. Direct Link
+        elif query and (query.startswith("http") or query.startswith("www")):
+            target_url = query.strip()
+            try:
+                title = target_url.split("/")[-1].split("?")[0]
+                if len(title) > 50 or "." not in title: title = "Direct Link"
+            except: title = "Direct Link"
+            await ctx.send("🔗 **Processing Direct Link...**")
+
+        # D. Search Query
+        elif query:
+            is_search = True
+            await ctx.send(f"☁️ **Searching SoundCloud for:** `{query}`...")
+        
+        else:
+            return await ctx.send("❌ **No audio found.** Provide a URL, name, or file.")
+
+        # 3. IF SEARCHING, RESOLVE URL NOW
+        if is_search:
+            ydl_opts = {
+                'format': 'bestaudio/best', 'noplaylist': True, 
+                'quiet': True, 'no_warnings': True, 
+                'source_address': '0.0.0.0', 'nocheckcertificate': True
+            }
+            loop = asyncio.get_event_loop()
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = await loop.run_in_executor(None, lambda: ydl.extract_info(f"scsearch1:{query}", download=False))
+                if 'entries' in info and info['entries']:
+                    target_url = info['entries'][0]['url']
+                    title = info['entries'][0].get('title', 'Unknown Track')
+                else:
+                    return await ctx.send("❌ No results found on SoundCloud.")
+
+        # 4. QUEUE LOGIC (Crash-Proof Version)
+        q_id = get_queue_id(ctx)
+        
+        if q_id not in queues:
+            queues[q_id] = []
+
+        if vc.is_playing() or vc.is_paused():
+            # Add to queue
+            queues[q_id].append({'url': target_url, 'title': title})
+            await ctx.send(f"📝 **Added to Queue:** {title}")
+        else:
+            # Play Immediately
+            await ctx.send(f"▶️ **Now Playing:** {title}")
+            play_audio_core(ctx, target_url, title)
+
+    except Exception as e:
+        await ctx.send(f"❌ **Error:** {e}")
+
+@bot.command()
+async def skip(ctx):
+    if len(bot.voice_clients) == 0: return await ctx.send("❌ Not in VC.")
+    vc = bot.voice_clients[0]
+    
+    if vc.is_playing() or vc.is_paused():
+        vc.stop() # Stopping triggers the 'after' callback, which plays the next song!
+        await ctx.send("⏭️ **Skipped.**")
+    else:
+        await ctx.send("❓ Nothing to skip.")
+
+@bot.command()
+async def pause(ctx):
+    if len(bot.voice_clients) == 0: return
+    vc = bot.voice_clients[0]
+    if vc.is_playing():
+        vc.pause()
+        await ctx.send("⏸️ **Paused.**")
+
+@bot.command()
+async def resume(ctx):
+    if len(bot.voice_clients) == 0: return
+    vc = bot.voice_clients[0]
+    if vc.is_paused():
+        vc.resume()
+        await ctx.send("▶️ **Resumed.**")
+
+@bot.command()
+async def queue(ctx):
+    q_id = get_queue_id(ctx)
+    if q_id not in queues or not queues[q_id]:
+        return await ctx.send("📭 **Queue is empty.**")
+    
+    msg = "**🎵 Up Next:**\n"
+    for i, track in enumerate(queues[q_id]):
+        msg += f"`{i+1}.` {track['title']}\n"
+    
+    await ctx.send(msg)
+
+@bot.command()
+async def pstop(ctx):
+    if len(bot.voice_clients) == 0: return await ctx.send("❌ Not in VC.")
+    vc = bot.voice_clients[0]
+    
+    # Clear queue so it doesn't auto-play next
+    q_id = get_queue_id(ctx)
+    if q_id in queues:
+        queues[q_id].clear()
+    
+    if vc.is_playing() or vc.is_paused():
+        vc.stop()
+        await ctx.send("⏹️ **Stopped & Queue Cleared.**")
+    else:
+        await ctx.send("❓ Nothing playing.")
 
 if __name__ == "__main__":
     if not TOKEN:
