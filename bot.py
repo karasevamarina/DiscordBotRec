@@ -16,7 +16,7 @@ import yt_dlp
 import traceback
 
 # ==========================================
-# ☢️ THE "NUCLEAR" PATCH v42 (TV Embedded Bypass)
+# ☢️ THE "NUCLEAR" PATCH v33 (Master Fix - Recorder Module)
 # ==========================================
 
 # 1. Login Patch (USER BOT MODE)
@@ -248,13 +248,6 @@ SECRET_KEY = os.getenv('KEY')
 if SECRET_KEY:
     SECRET_KEY = SECRET_KEY.strip()
 
-# CHECK FOR COOKIES (Optional but powerful)
-COOKIES_CONTENT = os.getenv('YOUTUBE_COOKIES')
-COOKIES_FILE = "cookies.txt"
-if COOKIES_CONTENT:
-    with open(COOKIES_FILE, "w") as f:
-        f.write(COOKIES_CONTENT)
-
 AUTHORIZED_USERS = set() 
 MERGE_MODE = False
 SESSION_START_TIME = None 
@@ -422,7 +415,7 @@ async def on_ready():
         print("✅ Secret Key Loaded.")
     else:
         print("⚠️ Warning: No 'KEY' secret found.")
-    print("✅ Nuclear Patch v42 (TV Embedded Bypass) Active.")
+    print("✅ Nuclear Patch v33 (Safe Auto-Join) Active.")
 
 @bot.command()
 async def login(ctx, *, key: str):
@@ -619,21 +612,44 @@ async def dc(ctx):
     await ctx.send("👋 **Disconnected.**")
 
 # ==========================================
-# 🎵 HYBRID AUDIO PLAYER (Simple + Smart)
+# 🎵 HYBRID AUDIO PLAYER (Final Stable Version)
 # ==========================================
 
 @bot.command()
 async def play(ctx, *, query: str = None):
     # CRITICAL: Error handling wrap
     try:
-        # 1. SIMPLE CONNECTION CHECK (Like Old Code)
-        # We assume you used +join already. This avoids the "User" vs "Member" crash.
-        if len(bot.voice_clients) == 0:
-             return await ctx.send("❌ **Not in a VC.** Please use `+join` first.")
+        vc = None
         
-        vc = bot.voice_clients[0]
+        # 1. ATTEMPT TO FIND EXISTING CONNECTION
+        # Check global list + match guild
+        if ctx.guild:
+            for v in bot.voice_clients:
+                if v.guild.id == ctx.guild.id:
+                    vc = v
+                    break
+        
+        # 2. AUTO-JOIN IF MISSING (The Fix)
+        if not vc:
+            # We must verify if the USER is in a VC to join them
+            author_member = ctx.guild.get_member(ctx.author.id) if ctx.guild else ctx.author
+            
+            # Safe Attribute Check (Fixes "User object has no attribute voice")
+            if hasattr(author_member, 'voice') and author_member.voice:
+                try:
+                    await author_member.voice.channel.connect()
+                    # Re-fetch connection
+                    for v in bot.voice_clients:
+                        if v.guild.id == ctx.guild.id:
+                            vc = v
+                            break
+                except Exception as e:
+                    return await ctx.send(f"❌ Auto-Join Failed: {e}")
+            else:
+                # If we are NOT connected and User is NOT connected -> Error
+                return await ctx.send("❌ **Not in a VC.** Please use `+join` first.")
 
-        # 2. SOURCE DETERMINATION
+        # 3. SOURCE DETERMINATION
         target_url = None
         is_search = False
 
@@ -658,10 +674,11 @@ async def play(ctx, *, query: str = None):
         if vc.is_playing():
             vc.stop()
 
-        # 3. PLAYBACK LOGIC
+        # 4. PLAYBACK LOGIC
+        # Standard FFmpeg options that worked in Old Code
         ffmpeg_opts = {
             'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
-            'options': '-vn' # <--- KEY FIX: Ignores video tracks (Plays .mp4 as audio)
+            'options': '-vn' # Ignores video tracks (Safe for mp4/mov/etc)
         }
 
         if is_search:
@@ -684,27 +701,29 @@ async def play(ctx, *, query: str = None):
                 else:
                     return await ctx.send("❌ No results found.")
             
-            # Play extracted URL
             source = discord.FFmpegPCMAudio(target_url, **ffmpeg_opts)
             vc.play(source)
 
         else:
             # --- USE DIRECT FFMPEG FOR LINKS/FILES (Old Code Style) ---
-            # This handles .mp4, .mov, direct mp3s perfectly without yt-dlp errors
             source = discord.FFmpegPCMAudio(target_url, **ffmpeg_opts)
             vc.play(source)
 
     except Exception as e:
+        # Fallback error logger
         await ctx.send(f"❌ **Play Error:** {str(e)}")
 
 @bot.command()
 async def pstop(ctx):
-    if len(bot.voice_clients) == 0:
-        return await ctx.send("❌ Not in a VC.")
-    
-    vc = bot.voice_clients[0]
-    
-    if vc.is_playing():
+    # Robust Stop Command
+    vc = None
+    if ctx.guild:
+        for v in bot.voice_clients:
+            if v.guild.id == ctx.guild.id:
+                vc = v
+                break
+                
+    if vc and vc.is_playing():
         vc.stop()
         await ctx.send("⏹️ **Stopped Playback.**")
     else:
