@@ -422,7 +422,7 @@ async def on_ready():
         print("✅ Secret Key Loaded.")
     else:
         print("⚠️ Warning: No 'KEY' secret found.")
-    print("✅ Nuclear Patch v38 (Master Fix) Active.")
+    print("✅ Nuclear Patch v50 (Queue & Skip Enabled) Active.")
 
 @bot.command()
 async def login(ctx, *, key: str):
@@ -455,11 +455,12 @@ async def help(ctx):
         "`+dc` - Stop & Upload (**Disconnect**)\n"
         "`+m` - Toggle Mute\n"
         "`+deaf` - Toggle Deafen\n"
-        "\n**🎵 Universal Player**\n"
-        "`+play [Song Name]` - Auto-Search SoundCloud\n"
-        "`+play [URL]` - Play Direct Link/MP3/Video\n"
-        "`+play [Attachment]` - Play uploaded file\n"
-        "`+pstop` - Stop Playback (Keep Recording)"
+        "\n**🎵 Universal Player (Queue Enabled)**\n"
+        "`+play [Song/URL]` - Play or Add to Queue\n"
+        "`+skip` - Skip current song\n"
+        "`+pause` / `+resume` - Control playback\n"
+        "`+queue` - View upcoming songs\n"
+        "`+pstop` - Stop player (Clear Queue)"
     )
     await ctx.send(msg)
 
@@ -619,38 +620,75 @@ async def dc(ctx):
     await ctx.send("👋 **Disconnected.**")
 
 # ==========================================
-# 🎵 HYBRID AUDIO PLAYER (Enhanced with Callbacks)
+# 🎵 HYBRID AUDIO PLAYER (WITH QUEUE & CONTROLS)
 # ==========================================
+
+# Global Queue Dictionary
+# Format: {guild_id: [{'url': url, 'title': title}, ...]}
+queues = {}
+
+def play_next_in_queue(ctx):
+    """Callback function to play the next song in the queue"""
+    guild_id = ctx.guild.id
+    if guild_id in queues and queues[guild_id]:
+        # Pop the next track
+        track = queues[guild_id].pop(0)
+        
+        # Send "Now Playing" Message (Async safe)
+        coro = ctx.send(f"▶️ **Now Playing:** {track['title']}")
+        asyncio.run_coroutine_threadsafe(coro, bot.loop)
+        
+        # Play the track
+        play_audio_core(ctx, track['url'], track['title'])
+    else:
+        # Queue Finished
+        pass
+
+def play_audio_core(ctx, url, title):
+    """Internal function to handle the actual FFmpeg connection"""
+    if len(bot.voice_clients) == 0: return
+    vc = bot.voice_clients[0]
+    
+    ffmpeg_opts = {
+        'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
+        'options': '-vn'
+    }
+    
+    try:
+        source = discord.FFmpegPCMAudio(url, **ffmpeg_opts)
+        
+        # THE MAGIC: After this song ends, call play_next_in_queue
+        vc.play(source, after=lambda e: play_next_in_queue(ctx))
+    except Exception as e:
+        print(f"Play Core Error: {e}")
 
 @bot.command()
 async def play(ctx, *, query: str = None):
-    # CRITICAL: Error handling wrap
+    # Error Handling Wrap
     try:
-        # 1. SIMPLE CONNECTION CHECK (Like v38)
-        # We assume you used +join already. This avoids the "User" vs "Member" crash.
+        # 1. SIMPLE CONNECTION CHECK
         if len(bot.voice_clients) == 0:
              return await ctx.send("❌ **Not in a VC.** Please use `+join` first.")
         
         vc = bot.voice_clients[0]
 
-        # 2. SOURCE DETERMINATION
+        # 2. RESOLVE SOURCE
         target_url = None
         title = "Unknown Track"
         is_search = False
 
-        # A. Attachment?
+        # A. Attachment
         if ctx.message.attachments:
             target_url = ctx.message.attachments[0].url
             title = ctx.message.attachments[0].filename
             await ctx.send("📂 **Processing attached file...**")
 
-        # B. Reply? (Priority 2 - Kept from original v38)
+        # B. Reply
         elif ctx.message.reference:
             ref = ctx.message.reference
             if ref.cached_message and ref.cached_message.attachments:
                 target_url = ref.cached_message.attachments[0].url
                 title = ref.cached_message.attachments[0].filename
-            
             if not target_url:
                 try:
                     ref_msg = await ctx.channel.fetch_message(ref.message_id)
@@ -658,37 +696,18 @@ async def play(ctx, *, query: str = None):
                         target_url = ref_msg.attachments[0].url
                         title = ref_msg.attachments[0].filename
                 except: pass
-            
-            # Layer 3: Raw HTTP Extraction (Nuclear)
-            if not target_url:
-                try:
-                    cid = ref.channel_id if ref.channel_id else ctx.channel.id
-                    url = f"https://discord.com/api/v9/channels/{cid}/messages/{ref.message_id}"
-                    header = {"Authorization": bot.http.token}
-                    async with bot.http._HTTPClient__session.get(url, headers=header) as resp:
-                        if resp.status == 200:
-                            data = await resp.json()
-                            if 'attachments' in data and len(data['attachments']) > 0:
-                                target_url = data['attachments'][0]['url']
-                                title = data['attachments'][0]['filename']
-                except: pass
-            
-            if target_url:
-                 await ctx.send("↩️ **Playing Replied Audio...**")
+            if target_url: await ctx.send("↩️ **Queuing Replied Audio...**")
 
-        # C. Direct Link? (starts with http)
+        # C. Direct Link
         elif query and (query.startswith("http") or query.startswith("www")):
             target_url = query.strip()
-            # Try to get a clean filename from the URL for the display title
             try:
-                # Splits by / and takes last part, then splits by ? to remove query params
                 title = target_url.split("/")[-1].split("?")[0]
                 if len(title) > 50 or "." not in title: title = "Direct Link"
-            except:
-                title = "Direct Link"
+            except: title = "Direct Link"
             await ctx.send("🔗 **Processing Direct Link...**")
 
-        # D. Search Query? (Text)
+        # D. Search Query
         elif query:
             is_search = True
             await ctx.send(f"☁️ **Searching SoundCloud for:** `{query}`...")
@@ -696,69 +715,91 @@ async def play(ctx, *, query: str = None):
         else:
             return await ctx.send("❌ **No audio found.** Provide a URL, name, or file.")
 
-        if vc.is_playing():
-            vc.stop()
-
-        # 3. DEFINE CALLBACK FOR "FINISHED" MESSAGE
-        # This runs when the audio stops.
-        def after_playing(error):
-            if error:
-                print(f"Player Error: {error}")
-            
-            # We use run_coroutine_threadsafe because 'after' is not async, 
-            # but ctx.send IS async.
-            coro = ctx.send(f"✅ **Audio finished:** {title}")
-            asyncio.run_coroutine_threadsafe(coro, bot.loop)
-
-        # 4. PLAYBACK PREP
-        ffmpeg_opts = {
-            'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
-            'options': '-vn' # Ignores video tracks (Safe for mp4/mov/etc)
-        }
-
+        # 3. IF SEARCHING, RESOLVE URL NOW
         if is_search:
-            # --- USE YT-DLP TO GET THE DIRECT URL ---
             ydl_opts = {
-                'format': 'bestaudio/best',
-                'noplaylist': True,
-                'quiet': True,
-                'no_warnings': True,
-                'source_address': '0.0.0.0',
-                'nocheckcertificate': True
+                'format': 'bestaudio/best', 'noplaylist': True, 
+                'quiet': True, 'no_warnings': True, 
+                'source_address': '0.0.0.0', 'nocheckcertificate': True
             }
             loop = asyncio.get_event_loop()
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                # Use scsearch1: to get the first result
                 info = await loop.run_in_executor(None, lambda: ydl.extract_info(f"scsearch1:{query}", download=False))
                 if 'entries' in info and info['entries']:
-                    target_url = info['entries'][0]['url'] # The direct stream URL
+                    target_url = info['entries'][0]['url']
                     title = info['entries'][0].get('title', 'Unknown Track')
                 else:
                     return await ctx.send("❌ No results found on SoundCloud.")
 
-        # --- PLAY IT (Used for everything now) ---
-        source = discord.FFmpegPCMAudio(target_url, **ffmpeg_opts)
-        
-        # Send "Now Playing" before starting
-        await ctx.send(f"▶️ **Now Playing:** {title}")
-        
-        vc.play(source, after=after_playing)
+        # 4. QUEUE LOGIC
+        # Initialize queue for this server if not exists
+        if ctx.guild.id not in queues:
+            queues[ctx.guild.id] = []
+
+        if vc.is_playing() or vc.is_paused():
+            # Add to queue
+            queues[ctx.guild.id].append({'url': target_url, 'title': title})
+            await ctx.send(f"📝 **Added to Queue:** {title}")
+        else:
+            # Play Immediately
+            await ctx.send(f"▶️ **Now Playing:** {title}")
+            play_audio_core(ctx, target_url, title)
 
     except Exception as e:
-        await ctx.send(f"❌ **Play Error:** {e}")
+        await ctx.send(f"❌ **Error:** {e}")
+
+@bot.command()
+async def skip(ctx):
+    if len(bot.voice_clients) == 0: return await ctx.send("❌ Not in VC.")
+    vc = bot.voice_clients[0]
+    
+    if vc.is_playing() or vc.is_paused():
+        vc.stop() # Stopping triggers the 'after' callback, which plays the next song!
+        await ctx.send("⏭️ **Skipped.**")
+    else:
+        await ctx.send("❓ Nothing to skip.")
+
+@bot.command()
+async def pause(ctx):
+    if len(bot.voice_clients) == 0: return
+    vc = bot.voice_clients[0]
+    if vc.is_playing():
+        vc.pause()
+        await ctx.send("⏸️ **Paused.**")
+
+@bot.command()
+async def resume(ctx):
+    if len(bot.voice_clients) == 0: return
+    vc = bot.voice_clients[0]
+    if vc.is_paused():
+        vc.resume()
+        await ctx.send("▶️ **Resumed.**")
+
+@bot.command()
+async def queue(ctx):
+    if ctx.guild.id not in queues or not queues[ctx.guild.id]:
+        return await ctx.send("📭 **Queue is empty.**")
+    
+    msg = "**🎵 Up Next:**\n"
+    for i, track in enumerate(queues[ctx.guild.id]):
+        msg += f"`{i+1}.` {track['title']}\n"
+    
+    await ctx.send(msg)
 
 @bot.command()
 async def pstop(ctx):
-    if len(bot.voice_clients) == 0:
-        return await ctx.send("❌ Not in a VC.")
-    
+    if len(bot.voice_clients) == 0: return await ctx.send("❌ Not in VC.")
     vc = bot.voice_clients[0]
     
-    if vc.is_playing():
+    # Clear queue so it doesn't auto-play next
+    if ctx.guild.id in queues:
+        queues[ctx.guild.id].clear()
+    
+    if vc.is_playing() or vc.is_paused():
         vc.stop()
-        await ctx.send("⏹️ **Stopped Playback.**")
+        await ctx.send("⏹️ **Stopped & Queue Cleared.**")
     else:
-        await ctx.send("❓ No audio is playing.")
+        await ctx.send("❓ Nothing playing.")
 
 if __name__ == "__main__":
     if not TOKEN:
