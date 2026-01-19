@@ -13,7 +13,7 @@ import time
 import io
 
 # ==========================================
-# ☢️ THE "NUCLEAR" PATCH v21 (Smart Login & Clean Logs)
+# ☢️ THE "NUCLEAR" PATCH v23 (Secure Login Fix)
 # ==========================================
 
 # 1. Login Patch
@@ -206,7 +206,7 @@ async def convert_wav_to_mp3_padded(wav_filename, mp3_filename, duration):
 # --- CONFIGURATION ---
 TOKEN = os.getenv('DISCORD_TOKEN')
 
-# FIX 1: Auto-Clean the Secret Key (Removes accidental newlines/spaces)
+# FIX: Securely load KEY from environment and clean it
 SECRET_KEY = os.getenv('KEY')
 if SECRET_KEY:
     SECRET_KEY = SECRET_KEY.strip()
@@ -225,25 +225,24 @@ bot = commands.Bot(command_prefix='+', intents=intents, help_command=None)
 # --- 🔒 THE GATEKEEPER ---
 @bot.check
 async def global_login_check(ctx):
+    # Allow login command always
     if ctx.command.name == 'login':
         return True
     
     if ctx.author.id in AUTHORIZED_USERS:
         return True
     else:
-        # Don't throw error to console, just warn user
+        # Warn user
         await ctx.send("❌ **Access Denied.** Please use `+login <key>` first.")
         return False
 
-# FIX 2: Silent Error Handler (Prevents Console Spam for Login Checks)
+# Silent Error Handler
 @bot.event
 async def on_command_error(ctx, error):
     if isinstance(error, commands.CheckFailure):
-        # We handled this in the check above, so suppress the console error
         return
     if isinstance(error, commands.CommandNotFound):
         return
-    # Print real errors only
     print(f"Command Error: {error}")
 
 # --- HELPER FUNCTIONS ---
@@ -328,21 +327,24 @@ async def finished_callback(sink, dest_channel, *args):
 async def on_ready():
     print(f'Logged in as "{bot.user.name}"')
     if SECRET_KEY:
-        print(f"✅ Secret Key Loaded (Login System Ready). Key Length: {len(SECRET_KEY)}")
+        print(f"✅ Secret Key Loaded (Secure Mode). Key Length: {len(SECRET_KEY)}")
     else:
-        print("⚠️ Warning: No 'KEY' secret found. Login commands will fail.")
-    print("✅ Nuclear Patch v21 (Smart Login & Clean Logs) Active.")
+        print("⚠️ FATAL: KEY is missing. Check your YAML file.")
+    print("✅ Nuclear Patch v23 (Secure Login) Active.")
 
 @bot.command()
-async def login(ctx, key: str):
+async def login(ctx, *, key: str):
     try: await ctx.message.delete()
     except: pass
     
     if ctx.author.id in AUTHORIZED_USERS:
         return await ctx.send("✅ You are already logged in.")
 
-    # FIX 3: Compare cleaned strings
-    if SECRET_KEY and key.strip() == SECRET_KEY:
+    # DIAGNOSTIC
+    if not SECRET_KEY:
+        return await ctx.send("⚠️ **System Error:** Bot cannot see the Secret Key! Check your Workflow YAML.")
+
+    if key.strip() == SECRET_KEY:
         AUTHORIZED_USERS.add(ctx.author.id)
         await ctx.send(f"✅ **Access Granted.** Welcome, {ctx.author.display_name}.")
     else:
