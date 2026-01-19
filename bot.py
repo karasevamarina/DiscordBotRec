@@ -13,7 +13,7 @@ import time
 import io
 
 # ==========================================
-# ☢️ THE "NUCLEAR" PATCH v13 (Sync Fixed)
+# ☢️ THE "NUCLEAR" PATCH v15 (Name Cache Fix)
 # ==========================================
 
 # 1. Login Patch
@@ -36,7 +36,7 @@ async def patched_login(self, token):
             raise discord.LoginFailure("Invalid User Token.")
         raise
 
-# 2. DIRECT SEND (File Uploads)
+# 2. DIRECT SEND
 async def direct_send(self, content=None, **kwargs):
     if hasattr(self, 'channel'):
         channel_id = self.channel.id 
@@ -100,7 +100,7 @@ async def patched_request(self, route, **kwargs):
             return []
         raise e
 
-# 4. Helper: DIRECT NAME FETCH
+# 4. Helper: DIRECT NAME FETCH (Backup Only)
 def fetch_real_name_sync(user_id, token):
     url = f"https://discord.com/api/v9/users/{user_id}"
     req = urllib.request.Request(url)
@@ -119,15 +119,14 @@ discord.http.HTTPClient.request = patched_request
 discord.abc.Messageable.send = direct_send
 
 # ==========================================
-# 🧠 CUSTOM SINK (THE CRASH FIX)
+# 🧠 SYNC SINK (Fixes Silence Gap)
 # ==========================================
 class SyncWaveSink(discord.sinks.WaveSink):
     def __init__(self):
         super().__init__()
         self.start_time = None
-        self.bytes_per_second = 192000 # 48k * 2ch * 2bytes
+        self.bytes_per_second = 192000
 
-    # FIXED ARGUMENT ORDER: (data, user_id) for py-cord
     def write(self, data, user_id):
         if self.start_time is None:
             self.start_time = time.time()
@@ -137,7 +136,6 @@ class SyncWaveSink(discord.sinks.WaveSink):
 
         file = self.audio_data[user_id].file
         
-        # Sync Logic
         elapsed_seconds = time.time() - self.start_time
         expected_bytes = int(elapsed_seconds * self.bytes_per_second)
         current_bytes = file.tell()
@@ -147,28 +145,39 @@ class SyncWaveSink(discord.sinks.WaveSink):
             chunk_size = min(padding_needed, 1920000) 
             file.write(b'\x00' * chunk_size)
             
-        file.write(data) # Now writes bytes (audio), not int (user_id)
+        file.write(data)
 
 # ==========================================
-# 🎵 CONVERSION & MERGE
+# 🎵 CONVERSION & PADDING
 # ==========================================
-async def convert_and_merge(file_list, output_filename, merge=False):
+async def convert_and_merge(file_list, output_filename, duration):
     if not file_list: return None
     
-    if merge:
-        cmd = ['ffmpeg', '-y']
-        for f in file_list:
-            cmd.extend(['-i', f])
-        cmd.extend(['-filter_complex', f'amix=inputs={len(file_list)}:duration=longest:dropout_transition=3', '-b:a', '128k', output_filename])
-    else:
-        return None 
+    cmd = ['ffmpeg', '-y']
+    for f in file_list:
+        cmd.extend(['-i', f])
+        
+    cmd.extend([
+        '-filter_complex', 
+        f'amix=inputs={len(file_list)}:duration=first:dropout_transition=3,apad', 
+        '-t', str(duration),
+        '-b:a', '128k', 
+        output_filename
+    ])
         
     process = await asyncio.create_subprocess_exec(*cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     await process.communicate()
     return output_filename
 
-async def convert_wav_to_mp3(wav_filename, mp3_filename):
-    cmd = ['ffmpeg', '-y', '-i', wav_filename, '-b:a', '128k', mp3_filename]
+async def convert_wav_to_mp3_padded(wav_filename, mp3_filename, duration):
+    cmd = [
+        'ffmpeg', '-y', 
+        '-i', wav_filename, 
+        '-af', 'apad', 
+        '-t', str(duration),
+        '-b:a', '128k', 
+        mp3_filename
+    ]
     process = await asyncio.create_subprocess_exec(*cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     await process.communicate()
     return mp3_filename
@@ -178,16 +187,25 @@ async def convert_wav_to_mp3(wav_filename, mp3_filename):
 # --- CONFIGURATION ---
 TOKEN = os.getenv('DISCORD_TOKEN')
 MERGE_MODE = False
+SESSION_START_TIME = None 
 
 # --- SETUP ---
 intents = discord.Intents.default()
 intents.message_content = True 
+intents.members = True # Ensure we can read member names!
 
 bot = commands.Bot(command_prefix='+', intents=intents, help_command=None)
 
 # --- HELPER FUNCTIONS ---
 async def finished_callback(sink, dest_channel, *args):
-    await dest_channel.send("✅ **Recording finished.** Processing sync & filenames...")
+    global SESSION_START_TIME
+    
+    if SESSION_START_TIME:
+        total_duration = (datetime.datetime.now() - SESSION_START_TIME).total_seconds()
+    else:
+        total_duration = 10 
+        
+    await dest_channel.send(f"✅ **Recording finished.** Duration: {int(total_duration)}s. Processing...")
     
     saved_wavs = []
     final_files = []
@@ -196,11 +214,32 @@ async def finished_callback(sink, dest_channel, *args):
     now = datetime.datetime.now(ist)
     time_str = now.strftime("%I-%M-%p")
 
+    # --- HYBRID NAME LOOKUP (The Fix) ---
     for user_id, audio in sink.audio_data.items():
-        username = await asyncio.to_thread(fetch_real_name_sync, user_id, bot.http.token)
-        safe_name = "".join(x for x in username if x.isalnum() or x in "._- ")
+        username = None
         
+        # 1. Try Guild Cache (Fastest, Prefer Display Name)
+        try:
+            if hasattr(dest_channel, 'guild'):
+                member = dest_channel.guild.get_member(user_id)
+                if member:
+                    username = member.display_name
+        except:
+            pass
+
+        # 2. Try Bot Global Cache (Backup)
+        if not username:
+            user = bot.get_user(user_id)
+            if user:
+                username = user.display_name or user.name
+
+        # 3. Last Resort: API Request (Slow)
+        if not username:
+            username = await asyncio.to_thread(fetch_real_name_sync, user_id, bot.http.token)
+
+        safe_name = "".join(x for x in username if x.isalnum() or x in "._- ")
         wav_name = f"{safe_name}_{time_str}.wav"
+        
         with open(wav_name, "wb") as f:
             f.write(audio.file.getbuffer())
         saved_wavs.append(wav_name)
@@ -208,9 +247,9 @@ async def finished_callback(sink, dest_channel, *args):
     global MERGE_MODE
     
     if MERGE_MODE:
-        await dest_channel.send("🔄 **Merging synced audio...**")
+        await dest_channel.send("🔄 **Merging & Padding...**")
         merged_name = f"Conversation_{time_str}.mp3"
-        result = await convert_and_merge(saved_wavs, merged_name, merge=True)
+        result = await convert_and_merge(saved_wavs, merged_name, total_duration)
         
         if result and os.path.exists(result):
             await dest_channel.send("Here is the full conversation:", file=discord.File(result))
@@ -220,7 +259,7 @@ async def finished_callback(sink, dest_channel, *args):
     else:
         for wav in saved_wavs:
             mp3_name = wav.replace(".wav", ".mp3")
-            await convert_wav_to_mp3(wav, mp3_name)
+            await convert_wav_to_mp3_padded(wav, mp3_name, total_duration)
             if os.path.exists(mp3_name):
                 final_files.append(discord.File(mp3_name))
         
@@ -239,11 +278,10 @@ async def finished_callback(sink, dest_channel, *args):
 @bot.event
 async def on_ready():
     print(f'Logged in as "{bot.user.name}"')
-    print("✅ Nuclear Patch v13 (Stable) Active.")
+    print("✅ Nuclear Patch v15 (Name Cache Fix) Active.")
 
 @bot.command()
 async def help(ctx):
-    # ADDED JOINID COMMAND HERE
     msg = (
         "**🎙️ User Recorder**\n"
         "`+join` - Find you and join VC\n"
@@ -311,8 +349,9 @@ async def record(ctx):
     if vc.recording:
         return await ctx.send("Already recording.")
 
-    global MERGE_MODE
+    global MERGE_MODE, SESSION_START_TIME
     MERGE_MODE = False 
+    SESSION_START_TIME = datetime.datetime.now() 
 
     vc.start_recording(
         SyncWaveSink(), 
@@ -331,8 +370,9 @@ async def recordall(ctx):
     if vc.recording:
         return await ctx.send("Already recording.")
 
-    global MERGE_MODE
+    global MERGE_MODE, SESSION_START_TIME
     MERGE_MODE = True 
+    SESSION_START_TIME = datetime.datetime.now() 
 
     vc.start_recording(
         SyncWaveSink(), 
