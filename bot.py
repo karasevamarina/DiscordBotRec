@@ -14,7 +14,7 @@ import io
 import math
 
 # ==========================================
-# ☢️ THE "NUCLEAR" PATCH v36 (Play Fallback Fix)
+# ☢️ THE "NUCLEAR" PATCH v33 (Master Fix - Recorder Module)
 # ==========================================
 
 # 1. Login Patch (USER BOT MODE)
@@ -379,9 +379,8 @@ async def finished_callback(sink, dest_channel, *args):
     for f in temp_wavs:
         if os.path.exists(f): os.remove(f)
 
-# --- REUSABLE RECORDING FUNCTION (Fixed for User Bots) ---
+# --- REUSABLE RECORDING FUNCTION ---
 async def start_recording_logic(ctx, merge_flag):
-    # FIX: Use bot.voice_clients[0] instead of ctx.guild.voice_client
     if len(bot.voice_clients) == 0:
         return await ctx.send("❌ I am not in a VC.")
     
@@ -414,7 +413,7 @@ async def on_ready():
         print("✅ Secret Key Loaded.")
     else:
         print("⚠️ Warning: No 'KEY' secret found.")
-    print("✅ Nuclear Patch v36 (Play Fallback Fix) Active.")
+    print("✅ Nuclear Patch v38 (URL & Video Support) Active.")
 
 @bot.command()
 async def login(ctx, *, key: str):
@@ -448,7 +447,7 @@ async def help(ctx):
         "`+m` - Toggle Mute\n"
         "`+deaf` - Toggle Deafen\n"
         "\n**🎵 Audio Player**\n"
-        "`+play` - Play attached/replied audio\n"
+        "`+play [url]` - Play attached/replied file or URL\n"
         "`+pstop` - Stop Playback (Keep Recording)"
     )
     await ctx.send(msg)
@@ -613,28 +612,39 @@ async def dc(ctx):
 # ==========================================
 
 @bot.command()
-async def play(ctx):
+async def play(ctx, *, direct_url: str = None):
     target_url = None
+
+    # 1. DIRECT URL CHECK (Priority 1)
+    if direct_url:
+        target_url = direct_url.strip()
     
-    # 1. Check Attachments on the command message
-    if ctx.message.attachments:
+    # 2. ATTACHMENT CHECK (Priority 2)
+    elif ctx.message.attachments:
         target_url = ctx.message.attachments[0].url
         
-    # 2. Check Reply Attachments (Robust Fallback)
+    # 3. REPLY CHECK (Triple-Layer - Priority 3)
     elif ctx.message.reference:
-        try:
-            # Try Standard Fetch First
-            ref_msg = await ctx.channel.fetch_message(ctx.message.reference.message_id)
-            if ref_msg.attachments:
-                target_url = ref_msg.attachments[0].url
-        except Exception:
-            # Fallback to RAW FETCH if library fails
+        ref = ctx.message.reference
+        
+        # Layer 1: Cached Message
+        if ref.cached_message and ref.cached_message.attachments:
+            target_url = ref.cached_message.attachments[0].url
+            
+        # Layer 2: API Fetch
+        if not target_url:
             try:
-                ref = ctx.message.reference
-                mid = ref.message_id
+                ref_msg = await ctx.channel.fetch_message(ref.message_id)
+                if ref_msg.attachments:
+                    target_url = ref_msg.attachments[0].url
+            except:
+                pass
+        
+        # Layer 3: Raw HTTP Extraction (Nuclear)
+        if not target_url:
+            try:
                 cid = ref.channel_id if ref.channel_id else ctx.channel.id
-                url = f"https://discord.com/api/v9/channels/{cid}/messages/{mid}"
-                
+                url = f"https://discord.com/api/v9/channels/{cid}/messages/{ref.message_id}"
                 header = {"Authorization": bot.http.token}
                 async with bot.http._HTTPClient__session.get(url, headers=header) as resp:
                     if resp.status == 200:
@@ -645,23 +655,22 @@ async def play(ctx):
                 pass
 
     if not target_url:
-        return await ctx.send("❌ **No audio found.** Please attach an audio file or reply to one.")
+        return await ctx.send("❌ **No audio/video found.** Provide a URL, attach a file, or reply to one.")
 
-    # 3. Check Connection
+    # 4. Check Connection
     if len(bot.voice_clients) == 0:
         return await ctx.send("❌ **Not in a VC.** Please use `+join` first.")
     
     vc = bot.voice_clients[0]
 
-    # 4. Handle Playing State
     if vc.is_playing():
         vc.stop()
 
-    # 5. Play Audio
+    # 5. Play
     try:
         ffmpeg_opts = {
             'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
-            'options': '-vn' 
+            'options': '-vn' # This ignores video tracks (Safe for mp4/mov/etc)
         }
         
         source = discord.FFmpegPCMAudio(target_url, **ffmpeg_opts)
