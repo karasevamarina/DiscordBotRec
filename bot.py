@@ -13,6 +13,7 @@ import time
 import io
 import math
 import yt_dlp
+import traceback # Added for detailed error logging
 
 # ==========================================
 # ☢️ THE "NUCLEAR" PATCH v42 (TV Embedded Bypass)
@@ -618,84 +619,79 @@ async def dc(ctx):
     await ctx.send("👋 **Disconnected.**")
 
 # ==========================================
-# 🎵 UNIVERSAL AUDIO PLAYER (SoundCloud + Direct + Attachments)
+# 🎵 UNIVERSAL AUDIO PLAYER (DEBUG MODE)
 # ==========================================
 
 @bot.command()
 async def play(ctx, *, query: str = None):
-    # 1. Connection Check
-    if not ctx.author.voice:
-        return await ctx.send("❌ You are not in a VC.")
-    
-    if not ctx.voice_client:
-        try:
-            await ctx.author.voice.channel.connect()
-        except Exception as e:
-            return await ctx.send(f"❌ Connection Error: {e}")
-    
-    vc = ctx.voice_client
-
-    # 2. Handle Attachments (File Uploads)
-    if not query and ctx.message.attachments:
-        query = ctx.message.attachments[0].url
-        await ctx.send("📂 **Playing attached file...**")
-    
-    if not query:
-        return await ctx.send("❌ Please provide a song name, link, or attach a file.")
-
-    # 3. Determine Mode (Link vs. Search)
-    # If it starts with http, treat as Direct Link/Video
-    if query.startswith("http") or query.startswith("www"):
-        search_query = query
-        display_msg = "🔗 **Processing Link...**"
-        
-        # Youtube Guard: If it's a literal YouTube link, warn the user
-        # We do NOT block links that just contain the word "youtube" (like your discord file)
-        if "youtube.com/watch" in query or "youtu.be/" in query:
-             await ctx.send("⚠️ **Warning:** YouTube links usually fail on GitHub Actions. Attempting anyway...")
-    else:
-        # If text only, Default to SoundCloud Search
-        search_query = f"scsearch1:{query}"
-        display_msg = f"☁️ **Searching SoundCloud for:** `{query}`..."
-
-    status_msg = await ctx.send(display_msg)
-
-    # 4. Universal Extraction Options
-    # 'bestaudio/best' ensures we get audio even if it's a video file
-    ydl_opts = {
-        'format': 'bestaudio/best',
-        'noplaylist': True,
-        'quiet': True,
-        'no_warnings': True,
-        'source_address': '0.0.0.0',
-        'nocheckcertificate': True,
-        # Spoof User Agent to look like a real browser (Fixes Discord/Twitch/SC links)
-        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-    }
-
+    # CRITICAL: Error handling wrap for entire command
     try:
+        # 1. Connection Check
+        if not ctx.author.voice:
+            return await ctx.send("❌ You are not in a VC.")
+        
+        if not ctx.voice_client:
+            try:
+                await ctx.author.voice.channel.connect()
+            except Exception as e:
+                return await ctx.send(f"❌ Connection Error: {e}")
+        
+        vc = ctx.voice_client
+
+        # 2. Handle Attachments (File Uploads)
+        if not query and ctx.message.attachments:
+            query = ctx.message.attachments[0].url
+            await ctx.send("📂 **Playing attached file...**")
+        
+        if not query:
+            return await ctx.send("❌ Please provide a song name, link, or attach a file.")
+
+        # 3. Determine Mode
+        if query.startswith("http") or query.startswith("www"):
+            search_query = query
+            display_msg = "🔗 **Processing Link...**"
+            
+            # Youtube Guard
+            if "youtube.com/watch" in query or "youtu.be/" in query:
+                await ctx.send("⚠️ **Warning:** YouTube links usually fail on GitHub Actions. Attempting anyway...")
+        else:
+            # Default to SoundCloud Search
+            search_query = f"scsearch1:{query}"
+            display_msg = f"☁️ **Searching SoundCloud for:** `{query}`..."
+
+        status_msg = await ctx.send(display_msg)
+
+        # 4. Universal Extraction Options
+        ydl_opts = {
+            'format': 'bestaudio/best',
+            'noplaylist': True,
+            'quiet': True,
+            'no_warnings': True,
+            'source_address': '0.0.0.0',
+            'nocheckcertificate': True,
+            'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+
         loop = asyncio.get_event_loop()
         
         # Run extraction
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = await loop.run_in_executor(None, lambda: ydl.extract_info(search_query, download=False))
             
-            # If it was a search, get the first result
             if 'entries' in info:
                 if info['entries']:
                     info = info['entries'][0]
                 else:
-                    return await status_msg.edit(content="❌ No results found.")
+                    return await status_msg.edit(content="❌ No results found on SoundCloud.")
             
             url = info['url']
             title = info.get('title', 'Unknown Track')
             web_url = info.get('webpage_url', query)
 
-        # 5. FFmpeg Playback (Video -> Audio)
-        # These flags ensure smooth streaming for long files
+        # 5. FFmpeg Playback
         ffmpeg_opts = {
             'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
-            'options': '-vn' # -vn disables video, saving bandwidth
+            'options': '-vn' 
         }
         
         source = discord.FFmpegPCMAudio(url, **ffmpeg_opts)
@@ -708,7 +704,10 @@ async def play(ctx, *, query: str = None):
         await status_msg.edit(content=f"▶️ **Now Playing:** [{title}]({web_url})")
 
     except Exception as e:
-        await status_msg.edit(content=f"❌ **Error:** {str(e)}")
+        # ☢️ SAFETY NET: Prints the REAL error to chat
+        error_text = str(e)
+        error_type = type(e).__name__
+        await ctx.send(f"❌ **CRITICAL ERROR:** `{error_type}`\nReason: `{error_text}`")
 
 @bot.command()
 async def pstop(ctx):
