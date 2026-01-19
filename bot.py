@@ -14,7 +14,7 @@ import io
 import math
 
 # ==========================================
-# ☢️ THE "NUCLEAR" PATCH v25 (Final Stable)
+# ☢️ THE "NUCLEAR" PATCH v27 (Mute/Deaf Control)
 # ==========================================
 
 # 1. Login Patch (USER BOT MODE)
@@ -37,7 +37,7 @@ async def patched_login(self, token):
             raise discord.LoginFailure("Invalid User Token.")
         raise
 
-# 2. DIRECT SEND (Loop Fix + Singular File Fix)
+# 2. DIRECT SEND
 async def direct_send(self, content=None, **kwargs):
     if hasattr(self, 'channel'):
         channel_id = self.channel.id 
@@ -128,7 +128,7 @@ discord.http.HTTPClient.request = patched_request
 discord.abc.Messageable.send = direct_send
 
 # ==========================================
-# 🧠 SYNC SINK (Static & Drift Fix)
+# 🧠 SYNC SINK
 # ==========================================
 class SyncWaveSink(discord.sinks.WaveSink):
     def __init__(self):
@@ -160,7 +160,7 @@ class SyncWaveSink(discord.sinks.WaveSink):
         file.write(data)
 
 # ==========================================
-# 🎵 SAFE MERGE & SPLIT (9MB Limit)
+# 🎵 SAFE MERGE & SPLIT
 # ==========================================
 async def split_audio_if_large(filepath, limit_mb=9):
     if not os.path.exists(filepath): return []
@@ -242,11 +242,9 @@ async def convert_wav_to_mp3_padded(wav_filename, mp3_filename, duration):
 
 # --- CONFIGURATION ---
 TOKEN = os.getenv('DISCORD_TOKEN')
-
-# 🔒 SECURITY: Load KEY from Secrets (NOT Hardcoded)
 SECRET_KEY = os.getenv('KEY')
 if SECRET_KEY:
-    SECRET_KEY = SECRET_KEY.strip() # Removes accidental spaces/newlines from Secret
+    SECRET_KEY = SECRET_KEY.strip()
 
 AUTHORIZED_USERS = set() 
 MERGE_MODE = False
@@ -267,7 +265,7 @@ async def global_login_check(ctx):
     await ctx.send("❌ **Access Denied.** Please use `+login <key>` first.")
     return False
 
-# Silent Error Handler (Hides Traceback logs)
+# Silent Error Handler
 @bot.event
 async def on_command_error(ctx, error):
     if isinstance(error, commands.CheckFailure): return
@@ -318,7 +316,7 @@ async def finished_callback(sink, dest_channel, *args):
     
     global MERGE_MODE
     
-    # 1. MERGE MODE (RecordAll)
+    # 1. MERGE MODE
     if MERGE_MODE and temp_wavs:
         await dest_channel.send("🔄 **Merging & Checking Size...**")
         merged_output = "merged_temp.mp3" 
@@ -343,18 +341,16 @@ async def finished_callback(sink, dest_channel, *args):
             await dest_channel.send("❌ Merge failed. Sending separate files.")
             MERGE_MODE = False 
 
-    # 2. SEPARATE FILES (Normal Record or Fallback)
+    # 2. SEPARATE FILES
     if not MERGE_MODE:
         if temp_wavs:
             await dest_channel.send("Here are the synced recordings:")
 
-        # LOOP: Send one by one to bypass 10MB Total Limit
         for idx, wav in enumerate(temp_wavs):
             mp3_name = real_names[idx] 
             await convert_wav_to_mp3_padded(wav, mp3_name, total_duration)
             
             if os.path.exists(mp3_name):
-                # Check 9MB Single File Limit
                 chunks = await split_audio_if_large(mp3_name)
                 
                 if len(chunks) > 1:
@@ -369,7 +365,6 @@ async def finished_callback(sink, dest_channel, *args):
                 
                 if os.path.exists(mp3_name): os.remove(mp3_name)
 
-    # Cleanup WAVs
     for f in temp_wavs:
         if os.path.exists(f): os.remove(f)
 
@@ -379,10 +374,10 @@ async def finished_callback(sink, dest_channel, *args):
 async def on_ready():
     print(f'Logged in as "{bot.user.name}"')
     if SECRET_KEY:
-        print("✅ Secret Key Loaded (Public Repo Safe).")
+        print("✅ Secret Key Loaded.")
     else:
-        print("⚠️ Warning: No 'KEY' secret found. Login will fail.")
-    print("✅ Nuclear Patch v25 (All Systems Go) Active.")
+        print("⚠️ Warning: No 'KEY' secret found.")
+    print("✅ Nuclear Patch v27 (Mute/Deaf Control) Active.")
 
 @bot.command()
 async def login(ctx, *, key: str):
@@ -407,30 +402,55 @@ async def help(ctx):
         "**🎙️ User Recorder**\n"
         "`+login <key>` - Unlock the bot\n"
         "`+join` - Find you and join VC\n"
-        "`+record` / `+recordall` - Start Recording\n"
+        "`+joinid <id>` - Join specific Channel ID\n"
+        "`+record` - Synced Separate Files\n"
+        "`+recordall` - Synced & Merged File\n"
         "`+stop` - Stop & Upload (**Stay in VC**)\n"
         "`+dc` - Stop & Upload (**Disconnect**)\n"
-        "`+name <text>` - Change Display Name"
+        "`+m` - Toggle Mute\n"
+        "`+deaf` - Toggle Deafen"
     )
     await ctx.send(msg)
 
 @bot.command()
-async def name(ctx, *, new_name: str):
-    url = "https://discord.com/api/v9/users/@me"
-    headers = {
-        "Authorization": bot.http.token,
-        "Content-Type": "application/json",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
-    }
-    payload = {"global_name": new_name}
-    session = bot.http._HTTPClient__session
-    async with session.patch(url, json=payload, headers=headers) as resp:
-        if resp.status == 200:
-            await ctx.send(f"✅ Display Name changed to: **{new_name}**")
-        elif resp.status == 429:
-            await ctx.send("❌ Rate Limited.")
-        else:
-            await ctx.send(f"❌ Failed: {resp.status}")
+async def m(ctx):
+    if len(bot.voice_clients) == 0:
+        return await ctx.send("❌ Not in a VC.")
+    
+    vc = bot.voice_clients[0]
+    me = ctx.guild.me
+    
+    if not me.voice:
+        return await ctx.send("❌ Not connected to voice state.")
+        
+    new_mute = not me.voice.self_mute
+    # Preserve current deaf state
+    current_deaf = me.voice.self_deaf
+    
+    await ctx.guild.change_voice_state(channel=vc.channel, self_mute=new_mute, self_deaf=current_deaf)
+    
+    status = "🔇 **Muted**" if new_mute else "🎙️ **Unmuted**"
+    await ctx.send(f"✅ Mic is now {status}.")
+
+@bot.command()
+async def deaf(ctx):
+    if len(bot.voice_clients) == 0:
+        return await ctx.send("❌ Not in a VC.")
+    
+    vc = bot.voice_clients[0]
+    me = ctx.guild.me
+    
+    if not me.voice:
+        return await ctx.send("❌ Not connected to voice state.")
+        
+    new_deaf = not me.voice.self_deaf
+    # Preserve current mute state
+    current_mute = me.voice.self_mute
+    
+    await ctx.guild.change_voice_state(channel=vc.channel, self_deaf=new_deaf, self_mute=current_mute)
+    
+    status = "🔕 **Deafened**" if new_deaf else "🔔 **Undeafened**"
+    await ctx.send(f"✅ Headset is now {status}.")
 
 @bot.command()
 async def join(ctx):
