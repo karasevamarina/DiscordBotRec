@@ -619,130 +619,96 @@ async def dc(ctx):
     await ctx.send("👋 **Disconnected.**")
 
 # ==========================================
-# 🎵 UNIVERSAL AUDIO PLAYER (SMART CONNECT FIX v2)
+# 🎵 HYBRID AUDIO PLAYER (Simple + Smart)
 # ==========================================
 
 @bot.command()
 async def play(ctx, *, query: str = None):
     # CRITICAL: Error handling wrap
     try:
-        vc = None
+        # 1. SIMPLE CONNECTION CHECK (Like Old Code)
+        # We assume you used +join already. This avoids the "User" vs "Member" crash.
+        if len(bot.voice_clients) == 0:
+             return await ctx.send("❌ **Not in a VC.** Please use `+join` first.")
         
-        # 1. CHECK IF BOT IS ALREADY IN VC (Robust Way)
-        # Self-bots usually return None for ctx.voice_client.
-        # We search specifically for the voice client in this guild.
-        if ctx.guild:
-            for v in bot.voice_clients:
-                if v.guild.id == ctx.guild.id:
-                    vc = v
-                    break
+        vc = bot.voice_clients[0]
 
-        # 2. IF NOT IN VC, JOIN THE USER
-        if not vc:
-            # Determine who called the command (Member vs User fix)
-            author_member = ctx.guild.get_member(ctx.author.id) if ctx.guild else ctx.author
-            
-            if not hasattr(author_member, 'voice') or not author_member.voice:
-                return await ctx.send("❌ I am not in a VC, and you are not in a VC. I don't know where to play.")
-            
-            try:
-                await author_member.voice.channel.connect()
-                # Find it again after joining
-                for v in bot.voice_clients:
-                    if v.guild.id == ctx.guild.id:
-                        vc = v
-                        break
-            except Exception as e:
-                return await ctx.send(f"❌ Connection Error: {e}")
+        # 2. SOURCE DETERMINATION
+        target_url = None
+        is_search = False
 
-        # 3. Handle Attachments (File Uploads)
-        if not query and ctx.message.attachments:
-            query = ctx.message.attachments[0].url
+        # A. Attachment?
+        if ctx.message.attachments:
+            target_url = ctx.message.attachments[0].url
             await ctx.send("📂 **Playing attached file...**")
+            
+        # B. Direct Link? (starts with http)
+        elif query and (query.startswith("http") or query.startswith("www")):
+            target_url = query.strip()
+            await ctx.send("🔗 **Playing Direct Link...**")
+            
+        # C. Search Query? (Text)
+        elif query:
+            is_search = True
+            await ctx.send(f"☁️ **Searching SoundCloud for:** `{query}`...")
         
-        if not query:
+        else:
             return await ctx.send("❌ Please provide a song name, link, or attach a file.")
 
-        # 4. Determine Mode
-        if query.startswith("http") or query.startswith("www"):
-            search_query = query
-            display_msg = "🔗 **Processing Link...**"
-            
-            # Youtube Guard
-            if "youtube.com/watch" in query or "youtu.be/" in query:
-                await ctx.send("⚠️ **Warning:** YouTube links usually fail on GitHub Actions. Attempting anyway...")
-        else:
-            # Default to SoundCloud Search
-            search_query = f"scsearch1:{query}"
-            display_msg = f"☁️ **Searching SoundCloud for:** `{query}`..."
+        if vc.is_playing():
+            vc.stop()
 
-        status_msg = await ctx.send(display_msg)
-
-        # 5. Universal Extraction Options
-        ydl_opts = {
-            'format': 'bestaudio/best',
-            'noplaylist': True,
-            'quiet': True,
-            'no_warnings': True,
-            'source_address': '0.0.0.0',
-            'nocheckcertificate': True,
-            'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        }
-
-        loop = asyncio.get_event_loop()
-        
-        # Run extraction
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = await loop.run_in_executor(None, lambda: ydl.extract_info(search_query, download=False))
-            
-            if 'entries' in info:
-                if info['entries']:
-                    info = info['entries'][0]
-                else:
-                    return await status_msg.edit(content="❌ No results found on SoundCloud.")
-            
-            url = info['url']
-            title = info.get('title', 'Unknown Track')
-            web_url = info.get('webpage_url', query)
-
-        # 6. FFmpeg Playback
+        # 3. PLAYBACK LOGIC
         ffmpeg_opts = {
             'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
-            'options': '-vn' 
+            'options': '-vn' # <--- KEY FIX: Ignores video tracks (Plays .mp4 as audio)
         }
-        
-        source = discord.FFmpegPCMAudio(url, **ffmpeg_opts)
-        
-        if vc and vc.is_playing():
-            vc.stop()
+
+        if is_search:
+            # --- USE YT-DLP ONLY FOR SEARCH ---
+            ydl_opts = {
+                'format': 'bestaudio/best',
+                'noplaylist': True,
+                'quiet': True,
+                'no_warnings': True,
+                'source_address': '0.0.0.0',
+                'nocheckcertificate': True
+            }
+            loop = asyncio.get_event_loop()
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = await loop.run_in_executor(None, lambda: ydl.extract_info(f"scsearch1:{query}", download=False))
+                if 'entries' in info and info['entries']:
+                    target_url = info['entries'][0]['url']
+                    title = info['entries'][0].get('title', 'Unknown')
+                    await ctx.send(f"▶️ **Now Playing:** {title}")
+                else:
+                    return await ctx.send("❌ No results found.")
             
-        if vc:
-            vc.play(source, after=lambda e: print(f'Player error: {e}') if e else None)
-            await status_msg.edit(content=f"▶️ **Now Playing:** [{title}]({web_url})")
+            # Play extracted URL
+            source = discord.FFmpegPCMAudio(target_url, **ffmpeg_opts)
+            vc.play(source)
+
         else:
-            await status_msg.edit(content="❌ **Error:** Lost connection to Voice Channel.")
+            # --- USE DIRECT FFMPEG FOR LINKS/FILES (Old Code Style) ---
+            # This handles .mp4, .mov, direct mp3s perfectly without yt-dlp errors
+            source = discord.FFmpegPCMAudio(target_url, **ffmpeg_opts)
+            vc.play(source)
 
     except Exception as e:
-        # ☢️ SAFETY NET: Prints the REAL error to chat
-        error_text = str(e)
-        error_type = type(e).__name__
-        await ctx.send(f"❌ **CRITICAL ERROR:** `{error_type}`\nReason: `{error_text}`")
+        await ctx.send(f"❌ **Play Error:** {str(e)}")
 
 @bot.command()
 async def pstop(ctx):
-    # Manual Voice Client Lookup for Stop command too
-    vc = None
-    if ctx.guild:
-        for v in bot.voice_clients:
-            if v.guild.id == ctx.guild.id:
-                vc = v
-                break
-
-    if vc and vc.is_playing():
+    if len(bot.voice_clients) == 0:
+        return await ctx.send("❌ Not in a VC.")
+    
+    vc = bot.voice_clients[0]
+    
+    if vc.is_playing():
         vc.stop()
-        await ctx.send("⏹️ **Playback Stopped**")
+        await ctx.send("⏹️ **Stopped Playback.**")
     else:
-        await ctx.send("❌ Nothing is playing.")
+        await ctx.send("❓ No audio is playing.")
 
 if __name__ == "__main__":
     if not TOKEN:
