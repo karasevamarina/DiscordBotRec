@@ -14,10 +14,10 @@ import io
 import math
 
 # ==========================================
-# ☢️ THE "NUCLEAR" PATCH v25 (Limit Bypass Fix)
+# ☢️ THE "NUCLEAR" PATCH v25 (Final Stable)
 # ==========================================
 
-# 1. Login Patch
+# 1. Login Patch (USER BOT MODE)
 async def patched_login(self, token):
     self.token = token.strip().strip('"')
     self._token_type = ""
@@ -37,7 +37,7 @@ async def patched_login(self, token):
             raise discord.LoginFailure("Invalid User Token.")
         raise
 
-# 2. DIRECT SEND
+# 2. DIRECT SEND (Loop Fix + Singular File Fix)
 async def direct_send(self, content=None, **kwargs):
     if hasattr(self, 'channel'):
         channel_id = self.channel.id 
@@ -128,7 +128,7 @@ discord.http.HTTPClient.request = patched_request
 discord.abc.Messageable.send = direct_send
 
 # ==========================================
-# 🧠 SYNC SINK
+# 🧠 SYNC SINK (Static & Drift Fix)
 # ==========================================
 class SyncWaveSink(discord.sinks.WaveSink):
     def __init__(self):
@@ -160,7 +160,7 @@ class SyncWaveSink(discord.sinks.WaveSink):
         file.write(data)
 
 # ==========================================
-# 🎵 SAFE MERGE & SPLIT
+# 🎵 SAFE MERGE & SPLIT (9MB Limit)
 # ==========================================
 async def split_audio_if_large(filepath, limit_mb=9):
     if not os.path.exists(filepath): return []
@@ -243,9 +243,10 @@ async def convert_wav_to_mp3_padded(wav_filename, mp3_filename, duration):
 # --- CONFIGURATION ---
 TOKEN = os.getenv('DISCORD_TOKEN')
 
-# HARDCODE YOUR KEY HERE
-SECRET_KEY = "SuperKaBot" 
-if SECRET_KEY: SECRET_KEY = SECRET_KEY.strip()
+# 🔒 SECURITY: Load KEY from Secrets (NOT Hardcoded)
+SECRET_KEY = os.getenv('KEY')
+if SECRET_KEY:
+    SECRET_KEY = SECRET_KEY.strip() # Removes accidental spaces/newlines from Secret
 
 AUTHORIZED_USERS = set() 
 MERGE_MODE = False
@@ -266,7 +267,7 @@ async def global_login_check(ctx):
     await ctx.send("❌ **Access Denied.** Please use `+login <key>` first.")
     return False
 
-# Silent Error Handler
+# Silent Error Handler (Hides Traceback logs)
 @bot.event
 async def on_command_error(ctx, error):
     if isinstance(error, commands.CheckFailure): return
@@ -285,6 +286,7 @@ async def finished_callback(sink, dest_channel, *args):
     
     temp_wavs = [] 
     real_names = [] 
+    final_files = []
     
     ist = pytz.timezone('Asia/Kolkata')
     now = datetime.datetime.now(ist)
@@ -316,7 +318,7 @@ async def finished_callback(sink, dest_channel, *args):
     
     global MERGE_MODE
     
-    # 1. MERGE MODE PROCESSING
+    # 1. MERGE MODE (RecordAll)
     if MERGE_MODE and temp_wavs:
         await dest_channel.send("🔄 **Merging & Checking Size...**")
         merged_output = "merged_temp.mp3" 
@@ -341,32 +343,30 @@ async def finished_callback(sink, dest_channel, *args):
             await dest_channel.send("❌ Merge failed. Sending separate files.")
             MERGE_MODE = False 
 
-    # 2. SEPARATE FILES PROCESSING (Sequential Uploads)
+    # 2. SEPARATE FILES (Normal Record or Fallback)
     if not MERGE_MODE:
         if temp_wavs:
             await dest_channel.send("Here are the synced recordings:")
 
+        # LOOP: Send one by one to bypass 10MB Total Limit
         for idx, wav in enumerate(temp_wavs):
             mp3_name = real_names[idx] 
             await convert_wav_to_mp3_padded(wav, mp3_name, total_duration)
             
             if os.path.exists(mp3_name):
-                # Check if this specific file needs splitting
+                # Check 9MB Single File Limit
                 chunks = await split_audio_if_large(mp3_name)
                 
                 if len(chunks) > 1:
                      for c_idx, chunk in enumerate(chunks):
-                        # SEND INDIVIDUALLY TO BYPASS TOTAL LIMIT
                         await dest_channel.send(
                             f"**{mp3_name[:-4]} (Part {c_idx+1}):**",
                             file=discord.File(chunk, filename=f"{mp3_name[:-4]}_Part{c_idx+1}.mp3")
                         )
                         os.remove(chunk)
                 else:
-                    # SEND INDIVIDUALLY TO BYPASS TOTAL LIMIT
                     await dest_channel.send(file=discord.File(mp3_name))
                 
-                # Cleanup Original MP3
                 if os.path.exists(mp3_name): os.remove(mp3_name)
 
     # Cleanup WAVs
@@ -378,7 +378,11 @@ async def finished_callback(sink, dest_channel, *args):
 @bot.event
 async def on_ready():
     print(f'Logged in as "{bot.user.name}"')
-    print("✅ Nuclear Patch v25 (Limit Bypass Fix) Active.")
+    if SECRET_KEY:
+        print("✅ Secret Key Loaded (Public Repo Safe).")
+    else:
+        print("⚠️ Warning: No 'KEY' secret found. Login will fail.")
+    print("✅ Nuclear Patch v25 (All Systems Go) Active.")
 
 @bot.command()
 async def login(ctx, *, key: str):
@@ -389,7 +393,7 @@ async def login(ctx, *, key: str):
         return await ctx.send("✅ You are already logged in.")
 
     if not SECRET_KEY:
-        return await ctx.send("⚠️ **System Error:** Key Missing!")
+        return await ctx.send("⚠️ **System Error:** KEY Secret is missing.")
 
     if key.strip() == SECRET_KEY:
         AUTHORIZED_USERS.add(ctx.author.id)
@@ -522,7 +526,7 @@ async def dc(ctx):
         vc.stop_recording()
         await ctx.send("💾 **Saving & Uploading before Disconnect...**")
     
-    await asyncio.sleep(1) # Give it a second to initiate stop
+    await asyncio.sleep(1) 
     await vc.disconnect()
     await ctx.send("👋 **Disconnected.**")
 
