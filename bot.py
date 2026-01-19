@@ -13,7 +13,7 @@ import time
 import io
 
 # ==========================================
-# ☢️ THE "NUCLEAR" PATCH v20 (Login System)
+# ☢️ THE "NUCLEAR" PATCH v21 (Smart Login & Clean Logs)
 # ==========================================
 
 # 1. Login Patch
@@ -205,9 +205,13 @@ async def convert_wav_to_mp3_padded(wav_filename, mp3_filename, duration):
 
 # --- CONFIGURATION ---
 TOKEN = os.getenv('DISCORD_TOKEN')
-SECRET_KEY = os.getenv('KEY') # The Login Password
-AUTHORIZED_USERS = set() # Stores logged-in user IDs
 
+# FIX 1: Auto-strip spaces from the Secret Key
+SECRET_KEY = os.getenv('KEY')
+if SECRET_KEY:
+    SECRET_KEY = SECRET_KEY.strip()
+
+AUTHORIZED_USERS = set() 
 MERGE_MODE = False
 SESSION_START_TIME = None 
 
@@ -218,21 +222,29 @@ intents.members = True
 
 bot = commands.Bot(command_prefix='+', intents=intents, help_command=None)
 
-# --- 🔒 THE GATEKEEPER (LOGIN CHECK) ---
+# --- 🔒 THE GATEKEEPER ---
 @bot.check
 async def global_login_check(ctx):
-    # Always allow the login command
     if ctx.command.name == 'login':
         return True
     
-    # Check if user is logged in
     if ctx.author.id in AUTHORIZED_USERS:
         return True
     else:
-        # Reject everyone else
-        await ctx.send("❌ **You don't have permission.** Please use `+login <key>` first.")
+        # Don't throw error to console, just warn user
+        await ctx.send("❌ **Access Denied.** Please use `+login <key>` first.")
         return False
-# ---------------------------------------
+
+# FIX 2: Silent Error Handler (Prevents Console Spam & Crash appearance)
+@bot.event
+async def on_command_error(ctx, error):
+    if isinstance(error, commands.CheckFailure):
+        # We handled this in the check above (sent message), so just pass
+        return
+    if isinstance(error, commands.CommandNotFound):
+        return
+    # Print real errors
+    print(f"Command Error: {error}")
 
 # --- HELPER FUNCTIONS ---
 async def finished_callback(sink, dest_channel, *args):
@@ -315,21 +327,26 @@ async def finished_callback(sink, dest_channel, *args):
 @bot.event
 async def on_ready():
     print(f'Logged in as "{bot.user.name}"')
-    print("✅ Nuclear Patch v20 (Login System) Active.")
+    if SECRET_KEY:
+        print("✅ Secret Key Loaded (Login System Ready).")
+    else:
+        print("⚠️ Warning: No 'KEY' secret found. Login commands will fail.")
+    print("✅ Nuclear Patch v21 (Smart Login & Clean Logs) Active.")
 
-# --- NEW LOGIN COMMAND ---
 @bot.command()
 async def login(ctx, key: str):
-    # Try to delete the message for security (if bot has permission)
     try: await ctx.message.delete()
     except: pass
+    
+    if ctx.author.id in AUTHORIZED_USERS:
+        return await ctx.send("✅ You are already logged in.")
 
-    if key == SECRET_KEY:
+    # FIX 3: Compare STRIPPED strings (Ignores spaces)
+    if SECRET_KEY and key.strip() == SECRET_KEY:
         AUTHORIZED_USERS.add(ctx.author.id)
-        await ctx.send(f"✅ **Access Granted.** Welcome, {ctx.author.display_name}. You may now use the bot.")
+        await ctx.send(f"✅ **Access Granted.** Welcome, {ctx.author.display_name}.")
     else:
         await ctx.send("❌ **Wrong Key.** Access Denied.")
-# -------------------------
 
 @bot.command()
 async def help(ctx):
