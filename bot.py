@@ -14,7 +14,7 @@ import io
 import math
 
 # ==========================================
-# ☢️ THE "NUCLEAR" PATCH v27 (Mute/Deaf Control)
+# ☢️ THE "NUCLEAR" PATCH v28 (Self-Bot Voice State Fix)
 # ==========================================
 
 # 1. Login Patch (USER BOT MODE)
@@ -377,7 +377,7 @@ async def on_ready():
         print("✅ Secret Key Loaded.")
     else:
         print("⚠️ Warning: No 'KEY' secret found.")
-    print("✅ Nuclear Patch v27 (Mute/Deaf Control) Active.")
+    print("✅ Nuclear Patch v28 (Voice State Fix) Active.")
 
 @bot.command()
 async def login(ctx, *, key: str):
@@ -412,22 +412,24 @@ async def help(ctx):
     )
     await ctx.send(msg)
 
+# --- NEW SELF-BOT VOICE COMMANDS (DIRECT WEBSOCKET) ---
+
 @bot.command()
 async def m(ctx):
     if len(bot.voice_clients) == 0:
         return await ctx.send("❌ Not in a VC.")
     
     vc = bot.voice_clients[0]
-    me = ctx.guild.me
     
-    if not me.voice:
-        return await ctx.send("❌ Not connected to voice state.")
-        
-    new_mute = not me.voice.self_mute
-    # Preserve current deaf state
-    current_deaf = me.voice.self_deaf
+    # For Self-Bots: We must modify the internal state and re-send the opcode 4
+    # We access the private '_voice_state' of the VoiceClient to toggle mute.
     
-    await ctx.guild.change_voice_state(channel=vc.channel, self_mute=new_mute, self_deaf=current_deaf)
+    # 1. Toggle Mute State
+    new_mute = not vc.guild.me.voice.self_mute
+    new_deaf = vc.guild.me.voice.self_deaf
+    
+    # 2. Send Opcode 4 (Voice State Update)
+    await vc.ws.voice_state(ctx.guild.id, channel_id=vc.channel.id, self_mute=new_mute, self_deaf=new_deaf)
     
     status = "🔇 **Muted**" if new_mute else "🎙️ **Unmuted**"
     await ctx.send(f"✅ Mic is now {status}.")
@@ -438,19 +440,18 @@ async def deaf(ctx):
         return await ctx.send("❌ Not in a VC.")
     
     vc = bot.voice_clients[0]
-    me = ctx.guild.me
     
-    if not me.voice:
-        return await ctx.send("❌ Not connected to voice state.")
-        
-    new_deaf = not me.voice.self_deaf
-    # Preserve current mute state
-    current_mute = me.voice.self_mute
+    # 1. Toggle Deaf State
+    new_deaf = not vc.guild.me.voice.self_deaf
+    new_mute = vc.guild.me.voice.self_mute # Keep existing mute state
     
-    await ctx.guild.change_voice_state(channel=vc.channel, self_deaf=new_deaf, self_mute=current_mute)
+    # 2. Send Opcode 4
+    await vc.ws.voice_state(ctx.guild.id, channel_id=vc.channel.id, self_mute=new_mute, self_deaf=new_deaf)
     
     status = "🔕 **Deafened**" if new_deaf else "🔔 **Undeafened**"
     await ctx.send(f"✅ Headset is now {status}.")
+
+# -------------------------------------------------------
 
 @bot.command()
 async def join(ctx):
