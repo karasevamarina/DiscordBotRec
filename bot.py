@@ -645,9 +645,14 @@ async def play(ctx, *, query: str = None):
 
     # 3. Determine Mode (Link vs. Search)
     # If it starts with http, treat as Direct Link/Video
-    if query.startswith("http"):
+    if query.startswith("http") or query.startswith("www"):
         search_query = query
         display_msg = "🔗 **Processing Link...**"
+        
+        # Youtube Guard: If it's a literal YouTube link, warn the user
+        # We do NOT block links that just contain the word "youtube" (like your discord file)
+        if "youtube.com/watch" in query or "youtu.be/" in query:
+             await ctx.send("⚠️ **Warning:** YouTube links usually fail on GitHub Actions. Attempting anyway...")
     else:
         # If text only, Default to SoundCloud Search
         search_query = f"scsearch1:{query}"
@@ -664,7 +669,7 @@ async def play(ctx, *, query: str = None):
         'no_warnings': True,
         'source_address': '0.0.0.0',
         'nocheckcertificate': True,
-        # Spoof User Agent to look like a real browser
+        # Spoof User Agent to look like a real browser (Fixes Discord/Twitch/SC links)
         'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
     }
 
