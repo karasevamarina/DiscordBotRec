@@ -14,7 +14,7 @@ import io
 import math
 
 # ==========================================
-# ☢️ THE "NUCLEAR" PATCH v28 (Self-Bot Voice State Fix)
+# ☢️ THE "NUCLEAR" PATCH v29 (Gateway Mute/Deaf Fix)
 # ==========================================
 
 # 1. Login Patch (USER BOT MODE)
@@ -377,7 +377,7 @@ async def on_ready():
         print("✅ Secret Key Loaded.")
     else:
         print("⚠️ Warning: No 'KEY' secret found.")
-    print("✅ Nuclear Patch v28 (Voice State Fix) Active.")
+    print("✅ Nuclear Patch v29 (Gateway Mute/Deaf Fix) Active.")
 
 @bot.command()
 async def login(ctx, *, key: str):
@@ -412,7 +412,7 @@ async def help(ctx):
     )
     await ctx.send(msg)
 
-# --- NEW SELF-BOT VOICE COMMANDS (DIRECT WEBSOCKET) ---
+# --- NEW SELF-BOT VOICE COMMANDS (MAIN GATEWAY INJECTION) ---
 
 @bot.command()
 async def m(ctx):
@@ -420,16 +420,23 @@ async def m(ctx):
         return await ctx.send("❌ Not in a VC.")
     
     vc = bot.voice_clients[0]
+    me = ctx.guild.me
     
-    # For Self-Bots: We must modify the internal state and re-send the opcode 4
-    # We access the private '_voice_state' of the VoiceClient to toggle mute.
+    # 1. Toggle Mute State based on current cache
+    new_mute = not me.voice.self_mute
+    new_deaf = me.voice.self_deaf
     
-    # 1. Toggle Mute State
-    new_mute = not vc.guild.me.voice.self_mute
-    new_deaf = vc.guild.me.voice.self_deaf
-    
-    # 2. Send Opcode 4 (Voice State Update)
-    await vc.ws.voice_state(ctx.guild.id, channel_id=vc.channel.id, self_mute=new_mute, self_deaf=new_deaf)
+    # 2. INJECT OPCODE 4 DIRECTLY TO MAIN GATEWAY
+    payload = {
+        "op": 4,
+        "d": {
+            "guild_id": ctx.guild.id,
+            "channel_id": vc.channel.id,
+            "self_mute": new_mute,
+            "self_deaf": new_deaf
+        }
+    }
+    await bot.ws.send_as_json(payload)
     
     status = "🔇 **Muted**" if new_mute else "🎙️ **Unmuted**"
     await ctx.send(f"✅ Mic is now {status}.")
@@ -440,13 +447,23 @@ async def deaf(ctx):
         return await ctx.send("❌ Not in a VC.")
     
     vc = bot.voice_clients[0]
+    me = ctx.guild.me
     
-    # 1. Toggle Deaf State
-    new_deaf = not vc.guild.me.voice.self_deaf
-    new_mute = vc.guild.me.voice.self_mute # Keep existing mute state
+    # 1. Toggle Deaf State based on current cache
+    new_deaf = not me.voice.self_deaf
+    new_mute = me.voice.self_mute
     
-    # 2. Send Opcode 4
-    await vc.ws.voice_state(ctx.guild.id, channel_id=vc.channel.id, self_mute=new_mute, self_deaf=new_deaf)
+    # 2. INJECT OPCODE 4 DIRECTLY TO MAIN GATEWAY
+    payload = {
+        "op": 4,
+        "d": {
+            "guild_id": ctx.guild.id,
+            "channel_id": vc.channel.id,
+            "self_mute": new_mute,
+            "self_deaf": new_deaf
+        }
+    }
+    await bot.ws.send_as_json(payload)
     
     status = "🔕 **Deafened**" if new_deaf else "🔔 **Undeafened**"
     await ctx.send(f"✅ Headset is now {status}.")
