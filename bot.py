@@ -619,36 +619,36 @@ async def dc(ctx):
     await ctx.send("👋 **Disconnected.**")
 
 # ==========================================
-# 🎵 UNIVERSAL AUDIO PLAYER (DEBUG MODE)
+# 🎵 UNIVERSAL AUDIO PLAYER (SMART CONNECT MODE)
 # ==========================================
 
 @bot.command()
 async def play(ctx, *, query: str = None):
-    # CRITICAL: Error handling wrap for entire command
+    # CRITICAL: Error handling wrap
     try:
-        # 1. FIXED: Convert "User" to "Member" (Fixes 'no attribute voice' error)
-        # Self-bots sometimes get a User object (global) instead of Member (server).
-        # We force-fetch the Member object from the guild cache.
-        author_member = None
-        if ctx.guild:
-            author_member = ctx.guild.get_member(ctx.author.id)
-        
-        # Fallback: If cache fails, use ctx.author (and pray it works), but usually get_member fixes it.
-        caller = author_member if author_member else ctx.author
-
-        # 2. Connection Check
-        if not hasattr(caller, 'voice') or not caller.voice:
-             return await ctx.send("❌ You are not in a VC.")
-        
-        if not ctx.voice_client:
-            try:
-                await caller.voice.channel.connect()
-            except Exception as e:
-                return await ctx.send(f"❌ Connection Error: {e}")
-        
+        # 1. SMART CONNECT LOGIC
+        # Priority: If Bot is ALREADY in a VC, use that.
         vc = ctx.voice_client
 
-        # 3. Handle Attachments (File Uploads)
+        if not vc:
+            # Bot is NOT in VC, so we must join the User.
+            # Convert "User" to "Member" to fix 'no attribute voice'
+            author_member = None
+            if ctx.guild:
+                author_member = ctx.guild.get_member(ctx.author.id)
+            
+            caller = author_member if author_member else ctx.author
+
+            if not hasattr(caller, 'voice') or not caller.voice:
+                return await ctx.send("❌ I am not in a VC, and you are not in a VC. I don't know where to play.")
+            
+            try:
+                await caller.voice.channel.connect()
+                vc = ctx.voice_client # Update vc after joining
+            except Exception as e:
+                return await ctx.send(f"❌ Connection Error: {e}")
+
+        # 2. Handle Attachments (File Uploads)
         if not query and ctx.message.attachments:
             query = ctx.message.attachments[0].url
             await ctx.send("📂 **Playing attached file...**")
@@ -656,7 +656,7 @@ async def play(ctx, *, query: str = None):
         if not query:
             return await ctx.send("❌ Please provide a song name, link, or attach a file.")
 
-        # 4. Determine Mode
+        # 3. Determine Mode
         if query.startswith("http") or query.startswith("www"):
             search_query = query
             display_msg = "🔗 **Processing Link...**"
@@ -671,7 +671,7 @@ async def play(ctx, *, query: str = None):
 
         status_msg = await ctx.send(display_msg)
 
-        # 5. Universal Extraction Options
+        # 4. Universal Extraction Options
         ydl_opts = {
             'format': 'bestaudio/best',
             'noplaylist': True,
@@ -698,7 +698,7 @@ async def play(ctx, *, query: str = None):
             title = info.get('title', 'Unknown Track')
             web_url = info.get('webpage_url', query)
 
-        # 6. FFmpeg Playback
+        # 5. FFmpeg Playback
         ffmpeg_opts = {
             'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
             'options': '-vn' 
