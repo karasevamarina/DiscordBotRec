@@ -19,7 +19,7 @@ import wave
 import edge_tts 
 
 # ==========================================
-# ☢️ THE "NUCLEAR" PATCH v92 (TTS Settings Added)
+# ☢️ THE "NUCLEAR" PATCH v93 (TTS Voices Fixed)
 # ==========================================
 
 # 1. Login Patch (RESTORED TO SCRIPT 1 - SIMPLE UA)
@@ -298,7 +298,7 @@ VOLUME_LEVEL = 1.0
 BASS_ACTIVE = False
 FOLLOW_MODE = False
 
-# TTS SETTINGS
+# TTS SETTINGS (FIXED ARAB VOICES)
 TTS_VOICE = "en-IN-NeerjaNeural" # Default
 VOICE_MAP = {
     "default": "en-IN-NeerjaNeural",
@@ -307,8 +307,8 @@ VOICE_MAP = {
     "us_male": "en-US-GuyNeural",
     "uk_female": "en-GB-SoniaNeural",
     "uk_male": "en-GB-RyanNeural",
-    "arab_female": "en-EG-SalmaNeural", # English (Egypt)
-    "arab_male": "en-EG-ShakirNeural"   # English (Egypt)
+    "arab_female": "ar-EG-SalmaNeural", # CORRECTED: ar-EG
+    "arab_male": "ar-EG-ShakirNeural"   # CORRECTED: ar-EG
 }
 
 # --- SETUP ---
@@ -518,7 +518,7 @@ async def on_ready():
         print("✅ Secret Key Loaded.")
     else:
         print("⚠️ Warning: No 'KEY' secret found.")
-    print("✅ Nuclear Patch v92 (TTS Settings) Active.")
+    print("✅ Nuclear Patch v93 (TTS Voices Fixed) Active.")
 
 @bot.command()
 async def login(ctx, *, key: str):
