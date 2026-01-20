@@ -16,10 +16,10 @@ import yt_dlp
 import traceback
 import wave 
 import edge_tts 
-import re # <--- Added for YouTube ID extraction
+import re 
 
 # ==========================================
-# ☢️ THE "NUCLEAR" PATCH v74 (Stable v69 + Invidious)
+# ☢️ THE "NUCLEAR" PATCH v78 (Stable + Cobalt Fix)
 # ==========================================
 
 # 1. Login Patch (USER BOT MODE)
@@ -136,58 +136,36 @@ discord.http.HTTPClient.request = patched_request
 discord.abc.Messageable.send = direct_send
 
 # ==========================================
-# 🧠 INVIDIOUS ENGINE (BYPASS YOUTUBE BLOCKS)
+# 🧠 COBALT ENGINE (THE YOUTUBE FIX)
 # ==========================================
-INVIDIOUS_INSTANCES = [
-    "https://inv.tux.pizza",
-    "https://yewtu.be",
-    "https://vid.puffyan.us",
-    "https://invidious.fdn.fr",
-    "https://invidious.flokinet.to"
-]
-
-def extract_video_id(url):
-    # Regex to grab ID from youtube.com/watch?v=ID or youtu.be/ID
-    regex = r'(?:v=|\/)([0-9A-Za-z_-]{11}).*'
-    match = re.search(regex, url)
-    return match.group(1) if match else None
-
-async def fetch_invidious_stream(video_id):
+async def fetch_cobalt_link(url):
     """
-    Rotates through Invidious instances to find a working audio stream.
-    Returns: (stream_url, title) or (None, None)
+    Uses Cobalt API to fetch a clean audio link from YouTube.
+    This bypasses IP blocks and avoids Invidious failures.
     """
+    payload = {
+        "url": url,
+        "vQuality": "720",
+        "isAudioOnly": True,
+        "aFormat": "mp3"
+    }
+    # Reliable Public Instances
+    hosts = [
+        "https://api.cobalt.tools/api/json", 
+        "https://co.wuk.sh/api/json"
+    ]
+    
     async with aiohttp.ClientSession() as session:
-        for instance in INVIDIOUS_INSTANCES:
-            api_url = f"{instance}/api/v1/videos/{video_id}"
+        for host in hosts:
             try:
-                print(f"🔄 Trying Invidious: {instance}...")
-                async with session.get(api_url, timeout=5) as resp:
+                print(f"🔄 Trying Cobalt ({host})...")
+                async with session.post(host, json=payload, headers={'Accept': 'application/json', 'Content-Type': 'application/json'}) as resp:
                     if resp.status == 200:
                         data = await resp.json()
-                        title = data.get('title', 'YouTube Video')
-                        
-                        # Find best audio stream
-                        best_audio = None
-                        # Check adaptive formats (usually better)
-                        for fmt in data.get('adaptiveFormats', []):
-                            if 'audio' in fmt.get('type', ''):
-                                best_audio = fmt.get('url')
-                                break
-                        
-                        # Fallback to normal formats
-                        if not best_audio:
-                            for fmt in data.get('formatStreams', []):
-                                if 'audio' in fmt.get('type', '') or fmt.get('audioQuality'):
-                                    best_audio = fmt.get('url')
-                                    break
-                                    
-                        if best_audio:
-                            print(f"✅ Found stream on {instance}")
-                            return best_audio, title
-            except:
-                continue 
-                
+                        if 'url' in data:
+                            return data['url'], "YouTube Audio (Cobalt)"
+            except: 
+                continue
     return None, None
 
 # ==========================================
@@ -561,7 +539,7 @@ async def on_ready():
         print("✅ Secret Key Loaded.")
     else:
         print("⚠️ Warning: No 'KEY' secret found.")
-    print("✅ Nuclear Patch v74 (Stable v69 + Invidious Fix) Active.")
+    print("✅ Nuclear Patch v78 (Stable + Cobalt Fix) Active.")
 
 @bot.command()
 async def login(ctx, *, key: str):
@@ -886,25 +864,21 @@ async def play(ctx, *, query: str = None):
 
         elif query:
             # ------------------------------------------------
-            # INVIDIOUS FIX: Bypass YouTube IP Blocks
+            # COBALT FIX: Bypass YouTube IP Blocks (Replaces Invidious)
             # ------------------------------------------------
             if "youtube.com" in query or "youtu.be" in query:
-                await ctx.send("🔄 **Fetching from Invidious (Bypassing blocks)...**")
-                vid_id = extract_video_id(query)
-                if vid_id:
-                    target_url, title = await fetch_invidious_stream(vid_id)
-                    if not target_url:
-                        return await ctx.send("❌ All Invidious instances failed. Try SoundCloud.")
-                else:
-                    return await ctx.send("❌ Invalid YouTube Link.")
+                await ctx.send("🔄 **Fetching via Cobalt (Bypassing YouTube blocks)...**")
+                target_url, title = await fetch_cobalt_link(query)
+                if not target_url:
+                    return await ctx.send("❌ Cobalt API failed. Try SoundCloud.")
                 
             # Direct Link Check
             elif query.startswith("http") or query.startswith("www"):
                 target_url = query.strip()
                 title = "Direct Link"
                 await ctx.send("🔗 **Processing Direct Link...**")
-                
-            # SoundCloud Search
+            
+            # SoundCloud Search (Fallback)
             else:
                 is_search = True
                 await ctx.send(f"☁️ **Searching SoundCloud for:** `{query}`...")
