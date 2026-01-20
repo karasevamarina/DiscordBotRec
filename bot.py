@@ -7,6 +7,7 @@ import asyncio
 import discord.http 
 import json
 import urllib.request
+import urllib.parse # <--- Added for Screenshot Fix
 import aiohttp 
 import subprocess 
 import time
@@ -18,7 +19,7 @@ import wave
 import edge_tts 
 
 # ==========================================
-# ☢️ THE "NUCLEAR" PATCH v81 (Stable + Screenshot Fix)
+# ☢️ THE "NUCLEAR" PATCH v82 (Stable + Smart SS Fix)
 # ==========================================
 
 # 1. Login Patch (USER BOT MODE)
@@ -505,7 +506,7 @@ async def on_ready():
         print("✅ Secret Key Loaded.")
     else:
         print("⚠️ Warning: No 'KEY' secret found.")
-    print("✅ Nuclear Patch v81 (Stable + Screenshot) Active.")
+    print("✅ Nuclear Patch v82 (Stable + Smart SS Fix) Active.")
 
 @bot.command()
 async def login(ctx, *, key: str):
@@ -542,7 +543,7 @@ async def help(ctx):
         "`+follow` - Toggle Auto-Follow Mode\n"
         "\n**🎵 Universal Player**\n"
         "`+play [Song/URL]` - Play/Queue\n"
-        "`+ss [URL] [time]` - Screenshot website\n"
+        "`+ss [URL] [time]` - Screenshot website (Smart Wait)\n"
         "`+tts [Text]` - Indian TTS\n"
         "`+skip` - Skip song\n"
         "`+pause` - Pause playback\n"
@@ -799,24 +800,19 @@ async def tts(ctx, *, text: str):
     except Exception as e:
         await ctx.send(f"❌ TTS Error: {e}")
 
+# ==========================================
+# 📸 SCREENSHOT COMMAND (Smart Engine)
+# ==========================================
 @bot.command()
 async def ss(ctx, url: str, wait_arg: str = "5s"):
     if not url.startswith("http"): url = "https://" + url
     
-    # Parse seconds (Min 5, Max 50)
-    seconds = 5
-    try:
-        # Extract digits from string (e.g. "10s" -> 10)
-        digits = "".join(filter(str.isdigit, wait_arg))
-        if digits: seconds = int(digits)
-    except: pass
+    # Smart Engine handles waiting automatically (ignores manual seconds to ensure quality)
+    await ctx.send(f"📸 **Capturing:** {url} (Smart Wait Active)...")
     
-    seconds = max(5, min(50, seconds))
-    
-    await ctx.send(f"📸 **Capturing:** {url} (Allowing {seconds}s to load)...")
-    
-    # API that supports 'wait' parameter
-    api_url = f"https://image.thum.io/get/width/1920/crop/1080/wait/{seconds}/noanimate/{url}"
+    # Using WordPress mShots (More reliable than Thum.io)
+    encoded_url = urllib.parse.quote(url)
+    api_url = f"https://s0.wp.com/mshots/v1/{encoded_url}?w=1920&h=1080"
     
     try:
         async with aiohttp.ClientSession() as session:
