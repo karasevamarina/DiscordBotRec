@@ -16,10 +16,9 @@ import yt_dlp
 import traceback
 import wave 
 import edge_tts 
-import re 
 
 # ==========================================
-# ☢️ THE "NUCLEAR" PATCH v78 (Stable + Cobalt Fix)
+# ☢️ THE "NUCLEAR" PATCH v81 (Stable + Screenshot Fix)
 # ==========================================
 
 # 1. Login Patch (USER BOT MODE)
@@ -134,39 +133,6 @@ def fetch_real_name_sync(user_id, token):
 discord.http.HTTPClient.static_login = patched_login
 discord.http.HTTPClient.request = patched_request
 discord.abc.Messageable.send = direct_send
-
-# ==========================================
-# 🧠 COBALT ENGINE (THE YOUTUBE FIX)
-# ==========================================
-async def fetch_cobalt_link(url):
-    """
-    Uses Cobalt API to fetch a clean audio link from YouTube.
-    This bypasses IP blocks and avoids Invidious failures.
-    """
-    payload = {
-        "url": url,
-        "vQuality": "720",
-        "isAudioOnly": True,
-        "aFormat": "mp3"
-    }
-    # Reliable Public Instances
-    hosts = [
-        "https://api.cobalt.tools/api/json", 
-        "https://co.wuk.sh/api/json"
-    ]
-    
-    async with aiohttp.ClientSession() as session:
-        for host in hosts:
-            try:
-                print(f"🔄 Trying Cobalt ({host})...")
-                async with session.post(host, json=payload, headers={'Accept': 'application/json', 'Content-Type': 'application/json'}) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        if 'url' in data:
-                            return data['url'], "YouTube Audio (Cobalt)"
-            except: 
-                continue
-    return None, None
 
 # ==========================================
 # 🎵 CUSTOM AUDIO ENGINE (SYNC FIXED)
@@ -539,7 +505,7 @@ async def on_ready():
         print("✅ Secret Key Loaded.")
     else:
         print("⚠️ Warning: No 'KEY' secret found.")
-    print("✅ Nuclear Patch v78 (Stable + Cobalt Fix) Active.")
+    print("✅ Nuclear Patch v81 (Stable + Screenshot) Active.")
 
 @bot.command()
 async def login(ctx, *, key: str):
@@ -576,6 +542,7 @@ async def help(ctx):
         "`+follow` - Toggle Auto-Follow Mode\n"
         "\n**🎵 Universal Player**\n"
         "`+play [Song/URL]` - Play/Queue\n"
+        "`+ss [URL] [time]` - Screenshot website\n"
         "`+tts [Text]` - Indian TTS\n"
         "`+skip` - Skip song\n"
         "`+pause` - Pause playback\n"
@@ -833,6 +800,37 @@ async def tts(ctx, *, text: str):
         await ctx.send(f"❌ TTS Error: {e}")
 
 @bot.command()
+async def ss(ctx, url: str, wait_arg: str = "5s"):
+    if not url.startswith("http"): url = "https://" + url
+    
+    # Parse seconds (Min 5, Max 50)
+    seconds = 5
+    try:
+        # Extract digits from string (e.g. "10s" -> 10)
+        digits = "".join(filter(str.isdigit, wait_arg))
+        if digits: seconds = int(digits)
+    except: pass
+    
+    seconds = max(5, min(50, seconds))
+    
+    await ctx.send(f"📸 **Capturing:** {url} (Allowing {seconds}s to load)...")
+    
+    # API that supports 'wait' parameter
+    api_url = f"https://image.thum.io/get/width/1920/crop/1080/wait/{seconds}/noanimate/{url}"
+    
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(api_url) as resp:
+                if resp.status == 200:
+                    data = await resp.read()
+                    file = discord.File(io.BytesIO(data), filename="screenshot.jpg")
+                    await ctx.send(file=file)
+                else:
+                    await ctx.send("❌ Screenshot API failed.")
+    except Exception as e:
+        await ctx.send(f"❌ Error: {e}")
+
+@bot.command()
 async def play(ctx, *, query: str = None):
     try:
         if len(bot.voice_clients) == 0:
@@ -864,21 +862,16 @@ async def play(ctx, *, query: str = None):
 
         elif query:
             # ------------------------------------------------
-            # COBALT FIX: Bypass YouTube IP Blocks (Replaces Invidious)
+            # YT FIX: BLOCK YOUTUBE EXPLICITLY TO STOP CRASHES
             # ------------------------------------------------
             if "youtube.com" in query or "youtu.be" in query:
-                await ctx.send("🔄 **Fetching via Cobalt (Bypassing YouTube blocks)...**")
-                target_url, title = await fetch_cobalt_link(query)
-                if not target_url:
-                    return await ctx.send("❌ Cobalt API failed. Try SoundCloud.")
+                return await ctx.send("❌ **YouTube is disabled.** Use SoundCloud or direct links.")
                 
             # Direct Link Check
-            elif query.startswith("http") or query.startswith("www"):
+            if query.startswith("http") or query.startswith("www"):
                 target_url = query.strip()
                 title = "Direct Link"
                 await ctx.send("🔗 **Processing Direct Link...**")
-            
-            # SoundCloud Search (Fallback)
             else:
                 is_search = True
                 await ctx.send(f"☁️ **Searching SoundCloud for:** `{query}`...")
