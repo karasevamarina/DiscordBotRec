@@ -4,3 +4,4 @@ pytz
 aiohttp
 yt-dlp
 ffmpeg-python
+edge-tts
