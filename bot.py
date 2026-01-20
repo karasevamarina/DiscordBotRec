@@ -15,9 +15,10 @@ import math
 import yt_dlp
 import traceback
 import wave 
+import edge_tts # <--- NEW: Required for Realistic Indian TTS
 
 # ==========================================
-# ☢️ THE "NUCLEAR" PATCH v64 (Studio Sync Fix)
+# ☢️ THE "NUCLEAR" PATCH v66 (Indian TTS + Studio Stable)
 # ==========================================
 
 # 1. Login Patch (USER BOT MODE)
@@ -67,6 +68,7 @@ async def direct_send(self, content=None, **kwargs):
 
     if files_to_send:
         data = aiohttp.FormData()
+        # FIX: Always send payload_json for files
         payload = {'content': str(content) if content else ""}
         data.add_field('payload_json', json.dumps(payload))
         
@@ -504,7 +506,7 @@ async def on_ready():
         print("✅ Secret Key Loaded.")
     else:
         print("⚠️ Warning: No 'KEY' secret found.")
-    print("✅ Nuclear Patch v64 (Studio Sync Fixed) Active.")
+    print("✅ Nuclear Patch v66 (Indian TTS + Studio) Active.")
 
 @bot.command()
 async def login(ctx, *, key: str):
@@ -541,6 +543,7 @@ async def help(ctx):
         "`+follow` - Toggle Auto-Follow Mode\n"
         "\n**🎵 Universal Player**\n"
         "`+play [Song/URL]` - Play/Queue\n"
+        "`+tts [Text]` - Speak (Indian Voice)\n"
         "`+skip` - Skip song\n"
         "`+pause` - Pause playback\n"
         "`+resume` - Resume playback\n"
@@ -761,6 +764,32 @@ def play_audio_core(ctx, url, title):
         vc.play(source, after=on_finish)
     except Exception as e:
         print(f"Play Core Error: {e}")
+
+@bot.command()
+async def tts(ctx, *, text: str):
+    if len(bot.voice_clients) == 0:
+        return await ctx.send("❌ **Not in a VC.** Please use `+join` first.")
+    
+    # Generate Realistic Indian TTS
+    VOICE = "en-IN-NeerjaNeural"
+    output_file = f"tts_{int(time.time())}.mp3"
+    
+    try:
+        communicate = edge_tts.Communicate(text, VOICE)
+        await communicate.save(output_file)
+        
+        # Add to Queue logic
+        q_id = get_queue_id(ctx)
+        if q_id not in queues: queues[q_id] = []
+        
+        if bot.voice_clients[0].is_playing() or bot.voice_clients[0].is_paused():
+            queues[q_id].append({'url': output_file, 'title': f"🗣️ TTS: {text[:20]}..."})
+            await ctx.send(f"📝 **TTS Added to Queue:** {text}")
+        else:
+            play_audio_core(ctx, output_file, f"🗣️ TTS: {text[:20]}...")
+            
+    except Exception as e:
+        await ctx.send(f"❌ **TTS Error:** {e}")
 
 @bot.command()
 async def play(ctx, *, query: str = None):
