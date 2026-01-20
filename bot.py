@@ -19,7 +19,7 @@ import wave
 import edge_tts 
 
 # ==========================================
-# ☢️ THE "NUCLEAR" PATCH v91 (Script 1 Network + Anti-Stutter)
+# ☢️ THE "NUCLEAR" PATCH v92 (TTS Settings Added)
 # ==========================================
 
 # 1. Login Patch (RESTORED TO SCRIPT 1 - SIMPLE UA)
@@ -89,10 +89,6 @@ async def direct_send(self, content=None, **kwargs):
             async with session.post(url, data=data, headers=headers) as resp:
                 if resp.status not in [200, 201]:
                     print(f"❌ Upload Failed: {resp.status}")
-                    # Try to notify if upload fails
-                    if hasattr(self, 'send'): 
-                        # Use a safe simplified send to avoid loop
-                        pass 
                 return await resp.json()
         except Exception as e:
             print(f"❌ Upload Error: {e}")
@@ -161,7 +157,6 @@ class RecordableFFmpegPCMAudio(discord.FFmpegPCMAudio):
                 padding_needed = expected_bytes - current_bytes
                 
                 # 3. Anti-Stutter Logic (Threshold = 15000 bytes / ~75ms)
-                # Ignores tiny internet lag, but catches real silence
                 if padding_needed > 15000:
                     if padding_needed < 100000000: 
                         BOT_PCM_BUFFER.write(b'\x00' * padding_needed)
@@ -302,6 +297,19 @@ AUTO_REC_MODE = None
 VOLUME_LEVEL = 1.0 
 BASS_ACTIVE = False
 FOLLOW_MODE = False
+
+# TTS SETTINGS
+TTS_VOICE = "en-IN-NeerjaNeural" # Default
+VOICE_MAP = {
+    "default": "en-IN-NeerjaNeural",
+    "india_male": "en-IN-PrabhatNeural",
+    "us_female": "en-US-JennyNeural",
+    "us_male": "en-US-GuyNeural",
+    "uk_female": "en-GB-SoniaNeural",
+    "uk_male": "en-GB-RyanNeural",
+    "arab_female": "en-EG-SalmaNeural", # English (Egypt)
+    "arab_male": "en-EG-ShakirNeural"   # English (Egypt)
+}
 
 # --- SETUP ---
 intents = discord.Intents.default()
@@ -510,7 +518,7 @@ async def on_ready():
         print("✅ Secret Key Loaded.")
     else:
         print("⚠️ Warning: No 'KEY' secret found.")
-    print("✅ Nuclear Patch v91 (Script 1 Network + Anti-Stutter) Active.")
+    print("✅ Nuclear Patch v92 (TTS Settings) Active.")
 
 @bot.command()
 async def login(ctx, *, key: str):
@@ -549,6 +557,7 @@ async def help(ctx):
         "`+play [Song/URL]` - Play/Queue\n"
         "`+ss [URL] [time]` - Screenshot (Smart Wait)\n"
         "`+tts [Text]` - Indian TTS\n"
+        "`+settingtts [voice]` - Change TTS Voice\n"
         "`+skip` - Skip song\n"
         "`+pause` - Pause playback\n"
         "`+resume` - Resume playback\n"
@@ -786,10 +795,9 @@ async def tts(ctx, *, text: str):
     
     # Generate unique filename
     output_file = f"tts_{int(time.time())}.mp3"
-    voice = "en-IN-NeerjaNeural"
     
     try:
-        communicate = edge_tts.Communicate(text, voice)
+        communicate = edge_tts.Communicate(text, TTS_VOICE)
         await communicate.save(output_file)
         
         q_id = get_queue_id(ctx)
@@ -803,6 +811,23 @@ async def tts(ctx, *, text: str):
             
     except Exception as e:
         await ctx.send(f"❌ TTS Error: {e}")
+
+@bot.command()
+async def settingtts(ctx, voice: str = None):
+    global TTS_VOICE
+    if not voice:
+        # List options
+        msg = "**🗣️ Available Voices:**\n"
+        for k in VOICE_MAP.keys():
+            msg += f"`{k}`\n"
+        msg += f"\n**Current:** `{next((k for k, v in VOICE_MAP.items() if v == TTS_VOICE), 'Custom')}`"
+        return await ctx.send(msg)
+    
+    if voice.lower() in VOICE_MAP:
+        TTS_VOICE = VOICE_MAP[voice.lower()]
+        await ctx.send(f"✅ TTS Voice set to: **{voice.lower()}**")
+    else:
+        await ctx.send("❌ Invalid voice. Type `+settingtts` to see list.")
 
 # ==========================================
 # 📸 SCREENSHOT COMMAND (Smart Engine + Windows 11 Size)
