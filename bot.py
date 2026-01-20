@@ -19,7 +19,7 @@ import wave
 import edge_tts 
 
 # ==========================================
-# ☢️ THE "NUCLEAR" PATCH v88 (Recorder Logic Restored)
+# ☢️ THE "NUCLEAR" PATCH v90 (Anti-Stutter Threshold Fix)
 # ==========================================
 
 # 1. Login Patch (USER BOT MODE)
@@ -32,7 +32,7 @@ async def patched_login(self, token):
 
     req = urllib.request.Request("https://discord.com/api/v9/users/@me")
     req.add_header("Authorization", self.token)
-    req.add_header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+    req.add_header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
     
     try:
         with urllib.request.urlopen(req) as response:
@@ -59,7 +59,7 @@ async def direct_send(self, content=None, **kwargs):
     # Using standard UA to match login (No stealth, just functional)
     headers = {
         "Authorization": bot.http.token,
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
 
     files_to_send = []
@@ -107,7 +107,7 @@ original_request = discord.http.HTTPClient.request
 async def patched_request(self, route, **kwargs):
     headers = kwargs.get('headers', {})
     headers['Authorization'] = self.token
-    headers['User-Agent'] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+    headers['User-Agent'] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     kwargs['headers'] = headers
     
     try:
@@ -122,7 +122,7 @@ def fetch_real_name_sync(user_id, token):
     url = f"https://discord.com/api/v9/users/{user_id}"
     req = urllib.request.Request(url)
     req.add_header("Authorization", token)
-    req.add_header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+    req.add_header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
     try:
         with urllib.request.urlopen(req) as response:
             data = json.loads(response.read().decode())
@@ -136,7 +136,7 @@ discord.http.HTTPClient.request = patched_request
 discord.abc.Messageable.send = direct_send
 
 # ==========================================
-# 🎵 CUSTOM AUDIO ENGINE (SYNC RESTORED - SCRIPT 1 LOGIC)
+# 🎵 CUSTOM AUDIO ENGINE (SYNC + ANTI-STUTTER)
 # ==========================================
 BOT_PCM_BUFFER = io.BytesIO()
 IS_RECORDING_BOT = False
@@ -158,8 +158,8 @@ class RecordableFFmpegPCMAudio(discord.FFmpegPCMAudio):
                 current_bytes = BOT_PCM_BUFFER.tell()
                 padding_needed = expected_bytes - current_bytes
                 
-                # 3. Fill silence if lagging (This fixes the stutter/buffering sound)
-                if padding_needed > 0:
+                # 3. Fill silence if lagging (THRESHOLD INCREASED TO 15000 TO FIX STUTTER)
+                if padding_needed > 15000:
                     if padding_needed < 100000000: 
                         BOT_PCM_BUFFER.write(b'\x00' * padding_needed)
                 
@@ -172,7 +172,7 @@ class RecordableFFmpegPCMAudio(discord.FFmpegPCMAudio):
         return data
 
 # ==========================================
-# 🧠 SYNC SINK (RECORDER STABLE)
+# 🧠 SYNC SINK (RECORDER STABLE + ANTI-STUTTER)
 # ==========================================
 class SyncWaveSink(discord.sinks.WaveSink):
     def __init__(self):
@@ -197,7 +197,8 @@ class SyncWaveSink(discord.sinks.WaveSink):
         current_bytes = file.tell()
         padding_needed = expected_bytes - current_bytes
         
-        if padding_needed > 3840: 
+        # THRESHOLD INCREASED TO 15000 TO FIX STUTTER
+        if padding_needed > 15000: 
             padding_needed = padding_needed - (padding_needed % 4)
             chunk_size = min(padding_needed, 1920000) 
             file.write(b'\x00' * chunk_size)
@@ -508,7 +509,7 @@ async def on_ready():
         print("✅ Secret Key Loaded.")
     else:
         print("⚠️ Warning: No 'KEY' secret found.")
-    print("✅ Nuclear Patch v88 (Recorder Logic Restored) Active.")
+    print("✅ Nuclear Patch v90 (Anti-Stutter) Active.")
 
 @bot.command()
 async def login(ctx, *, key: str):
