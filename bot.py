@@ -19,7 +19,7 @@ import wave
 import edge_tts 
 
 # ==========================================
-# ☢️ THE "NUCLEAR" PATCH v88 (Recorder Fix + Win11 SS)
+# ☢️ THE "NUCLEAR" PATCH v88 (Recorder Logic Restored)
 # ==========================================
 
 # 1. Login Patch (USER BOT MODE)
@@ -136,7 +136,7 @@ discord.http.HTTPClient.request = patched_request
 discord.abc.Messageable.send = direct_send
 
 # ==========================================
-# 🎵 CUSTOM AUDIO ENGINE (SYNC RESTORED)
+# 🎵 CUSTOM AUDIO ENGINE (SYNC RESTORED - SCRIPT 1 LOGIC)
 # ==========================================
 BOT_PCM_BUFFER = io.BytesIO()
 IS_RECORDING_BOT = False
@@ -145,11 +145,11 @@ class RecordableFFmpegPCMAudio(discord.FFmpegPCMAudio):
     def read(self):
         data = super().read()
         
-        # --- FIXED LOGIC FROM SCRIPT 1 ---
+        # --- FIXED LOGIC FROM SCRIPT 1 (PERFECT SYNC) ---
         # If "Studio Mode" is active, capture this data
         if IS_RECORDING_BOT and SESSION_START_TIME and data:
             try:
-                # 1. Calculate bytes needed for sync
+                # 1. Calculate bytes needed for sync based on elapsed time
                 elapsed = datetime.datetime.now() - SESSION_START_TIME
                 expected_bytes = int(elapsed.total_seconds() * 192000) # 192KB/s
                 expected_bytes -= (expected_bytes % 4) # Align
@@ -158,7 +158,7 @@ class RecordableFFmpegPCMAudio(discord.FFmpegPCMAudio):
                 current_bytes = BOT_PCM_BUFFER.tell()
                 padding_needed = expected_bytes - current_bytes
                 
-                # 3. Fill silence if lagging
+                # 3. Fill silence if lagging (This fixes the stutter/buffering sound)
                 if padding_needed > 0:
                     if padding_needed < 100000000: 
                         BOT_PCM_BUFFER.write(b'\x00' * padding_needed)
@@ -167,7 +167,7 @@ class RecordableFFmpegPCMAudio(discord.FFmpegPCMAudio):
                 BOT_PCM_BUFFER.write(data)
             except:
                 pass 
-        # ---------------------------------
+        # ----------------------------------------------------
                 
         return data
 
@@ -189,6 +189,7 @@ class SyncWaveSink(discord.sinks.WaveSink):
 
         file = self.audio_data[user_id].file
         
+        # Exact same logic as Script 1 for user audio sync
         elapsed_seconds = time.time() - self.start_time
         expected_bytes = int(elapsed_seconds * self.bytes_per_second)
         expected_bytes = expected_bytes - (expected_bytes % 4) 
@@ -507,7 +508,7 @@ async def on_ready():
         print("✅ Secret Key Loaded.")
     else:
         print("⚠️ Warning: No 'KEY' secret found.")
-    print("✅ Nuclear Patch v88 (Recorder Fixed) Active.")
+    print("✅ Nuclear Patch v88 (Recorder Logic Restored) Active.")
 
 @bot.command()
 async def login(ctx, *, key: str):
