@@ -15,10 +15,10 @@ import math
 import yt_dlp
 import traceback
 import wave 
-import edge_tts # <--- NEW: Required for Realistic Indian TTS
+import edge_tts # <--- NEW: Required for TTS
 
 # ==========================================
-# ☢️ THE "NUCLEAR" PATCH v66 (Indian TTS + Studio Stable)
+# ☢️ THE "NUCLEAR" PATCH v68 (TTS + YT Fix + Studio Master)
 # ==========================================
 
 # 1. Login Patch (USER BOT MODE)
@@ -68,7 +68,6 @@ async def direct_send(self, content=None, **kwargs):
 
     if files_to_send:
         data = aiohttp.FormData()
-        # FIX: Always send payload_json for files
         payload = {'content': str(content) if content else ""}
         data.add_field('payload_json', json.dumps(payload))
         
@@ -506,7 +505,7 @@ async def on_ready():
         print("✅ Secret Key Loaded.")
     else:
         print("⚠️ Warning: No 'KEY' secret found.")
-    print("✅ Nuclear Patch v66 (Indian TTS + Studio) Active.")
+    print("✅ Nuclear Patch v68 (TTS + YT Fix) Active.")
 
 @bot.command()
 async def login(ctx, *, key: str):
@@ -543,7 +542,7 @@ async def help(ctx):
         "`+follow` - Toggle Auto-Follow Mode\n"
         "\n**🎵 Universal Player**\n"
         "`+play [Song/URL]` - Play/Queue\n"
-        "`+tts [Text]` - Speak (Indian Voice)\n"
+        "`+tts [Text]` - Indian TTS\n"
         "`+skip` - Skip song\n"
         "`+pause` - Pause playback\n"
         "`+resume` - Resume playback\n"
@@ -742,17 +741,24 @@ def play_audio_core(ctx, url, title):
         filters.append(f"volume={VOLUME_LEVEL}")
     if BASS_ACTIVE:
         filters.append("bass=g=20")
-        
-    filter_str = ""
-    if filters:
-        filter_str = f' -filter:a "{",".join(filters)}"'
     
-    ffmpeg_opts = {
-        'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
-        'options': f'-vn{filter_str}' 
-    }
-    
-    def on_finish(error):
+    # ----------------------------------------------------
+    # NUCLEAR FIX v68: Detect if Local File or Web Stream
+    # ----------------------------------------------------
+    if url.startswith("http") or url.startswith("www"):
+        # Web Stream Options (Reconnect allowed)
+        opts = {'before_options': '-reconnect 1 -reconnect_streamed 1', 'options': f'-vn{f" -filter:a {','.join(filters)}" if filters else ""}'}
+    else:
+        # Local File Options (NO Reconnect - Fixes TTS silence)
+        opts = {'options': f'-vn{f" -filter:a {','.join(filters)}" if filters else ""}'}
+    # ----------------------------------------------------
+
+    def on_finish(e):
+        # Cleanup TTS file if it exists
+        if os.path.exists(url) and "tts_" in url:
+            try: os.remove(url)
+            except: pass
+            
         if error: print(f"Player Error: {error}")
         coro = ctx.send(f"✅ **Finished:** {title}")
         asyncio.run_coroutine_threadsafe(coro, bot.loop)
@@ -760,36 +766,34 @@ def play_audio_core(ctx, url, title):
 
     try:
         # Use our Custom Recordable Audio Class instead of the standard one
-        source = RecordableFFmpegPCMAudio(url, **ffmpeg_opts)
+        source = RecordableFFmpegPCMAudio(url, **opts)
         vc.play(source, after=on_finish)
     except Exception as e:
         print(f"Play Core Error: {e}")
 
 @bot.command()
 async def tts(ctx, *, text: str):
-    if len(bot.voice_clients) == 0:
-        return await ctx.send("❌ **Not in a VC.** Please use `+join` first.")
+    if len(bot.voice_clients) == 0: return await ctx.send("❌ **Not in a VC.** Please use `+join` first.")
     
-    # Generate Realistic Indian TTS
-    VOICE = "en-IN-NeerjaNeural"
+    # Generate unique filename
     output_file = f"tts_{int(time.time())}.mp3"
+    voice = "en-IN-NeerjaNeural"
     
     try:
-        communicate = edge_tts.Communicate(text, VOICE)
+        communicate = edge_tts.Communicate(text, voice)
         await communicate.save(output_file)
         
-        # Add to Queue logic
         q_id = get_queue_id(ctx)
         if q_id not in queues: queues[q_id] = []
         
-        if bot.voice_clients[0].is_playing() or bot.voice_clients[0].is_paused():
-            queues[q_id].append({'url': output_file, 'title': f"🗣️ TTS: {text[:20]}..."})
-            await ctx.send(f"📝 **TTS Added to Queue:** {text}")
+        if bot.voice_clients[0].is_playing():
+            queues[q_id].append({'url': output_file, 'title': f"🗣️ {text[:20]}..."})
+            await ctx.send(f"📝 **TTS Queued:** {text}")
         else:
-            play_audio_core(ctx, output_file, f"🗣️ TTS: {text[:20]}...")
+            play_audio_core(ctx, output_file, f"🗣️ {text}")
             
     except Exception as e:
-        await ctx.send(f"❌ **TTS Error:** {e}")
+        await ctx.send(f"❌ TTS Error: {e}")
 
 @bot.command()
 async def play(ctx, *, query: str = None):
@@ -821,14 +825,21 @@ async def play(ctx, *, query: str = None):
                 except: pass
             if target_url: await ctx.send("↩️ **Queuing Replied Audio...**")
 
-        elif query and (query.startswith("http") or query.startswith("www")):
-            target_url = query.strip()
-            title = "Direct Link"
-            await ctx.send("🔗 **Processing Direct Link...**")
-
         elif query:
-            is_search = True
-            await ctx.send(f"☁️ **Searching SoundCloud for:** `{query}`...")
+            # ------------------------------------------------
+            # YT FIX: BLOCK YOUTUBE EXPLICITLY TO STOP CRASHES
+            # ------------------------------------------------
+            if "youtube.com" in query or "youtu.be" in query:
+                return await ctx.send("❌ **YouTube is disabled.** Use SoundCloud or direct links.")
+                
+            # Direct Link Check
+            if query.startswith("http") or query.startswith("www"):
+                target_url = query.strip()
+                title = "Direct Link"
+                await ctx.send("🔗 **Processing Direct Link...**")
+            else:
+                is_search = True
+                await ctx.send(f"☁️ **Searching SoundCloud for:** `{query}`...")
         
         else:
             return await ctx.send("❌ **No audio found.** Provide a URL, name, or file.")
