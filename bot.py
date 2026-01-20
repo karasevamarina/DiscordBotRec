@@ -19,7 +19,7 @@ import wave
 import edge_tts 
 
 # ==========================================
-# ☢️ THE "NUCLEAR" PATCH v84 (Windows 11 SS Fix)
+# ☢️ THE "NUCLEAR" PATCH v88 (Recorder Fix + Win11 SS)
 # ==========================================
 
 # 1. Login Patch (USER BOT MODE)
@@ -56,6 +56,7 @@ async def direct_send(self, content=None, **kwargs):
     global bot
     session = bot.http._HTTPClient__session
     
+    # Using standard UA to match login (No stealth, just functional)
     headers = {
         "Authorization": bot.http.token,
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
@@ -87,8 +88,7 @@ async def direct_send(self, content=None, **kwargs):
             async with session.post(url, data=data, headers=headers) as resp:
                 if resp.status not in [200, 201]:
                     print(f"❌ Upload Failed: {resp.status}")
-                    if hasattr(self, 'send'): 
-                        await self.send(f"❌ **Upload Failed.** Status: {resp.status}")
+                    # No self.send loop
                 return await resp.json()
         except Exception as e:
             print(f"❌ Upload Error: {e}")
@@ -136,7 +136,7 @@ discord.http.HTTPClient.request = patched_request
 discord.abc.Messageable.send = direct_send
 
 # ==========================================
-# 🎵 CUSTOM AUDIO ENGINE (SYNC FIXED)
+# 🎵 CUSTOM AUDIO ENGINE (SYNC RESTORED)
 # ==========================================
 BOT_PCM_BUFFER = io.BytesIO()
 IS_RECORDING_BOT = False
@@ -145,28 +145,29 @@ class RecordableFFmpegPCMAudio(discord.FFmpegPCMAudio):
     def read(self):
         data = super().read()
         
+        # --- FIXED LOGIC FROM SCRIPT 1 ---
         # If "Studio Mode" is active, capture this data
         if IS_RECORDING_BOT and SESSION_START_TIME and data:
             try:
-                # 1. Calculate how many bytes we SHOULD have at this exact timestamp
+                # 1. Calculate bytes needed for sync
                 elapsed = datetime.datetime.now() - SESSION_START_TIME
                 expected_bytes = int(elapsed.total_seconds() * 192000) # 192KB/s
                 expected_bytes -= (expected_bytes % 4) # Align
                 
-                # 2. Calculate where the buffer IS right now
+                # 2. Check current buffer size
                 current_bytes = BOT_PCM_BUFFER.tell()
                 padding_needed = expected_bytes - current_bytes
                 
-                # 3. FILL SILENCE (THE FIX: Increased limit to ~100MB/9mins)
+                # 3. Fill silence if lagging
                 if padding_needed > 0:
-                    # Write silence in chunks if it's huge to avoid memory spike
                     if padding_needed < 100000000: 
                         BOT_PCM_BUFFER.write(b'\x00' * padding_needed)
                 
-                # 4. Write the actual audio data
+                # 4. Write actual audio
                 BOT_PCM_BUFFER.write(data)
             except:
                 pass 
+        # ---------------------------------
                 
         return data
 
@@ -506,7 +507,7 @@ async def on_ready():
         print("✅ Secret Key Loaded.")
     else:
         print("⚠️ Warning: No 'KEY' secret found.")
-    print("✅ Nuclear Patch v84 (Windows 11 SS Fix) Active.")
+    print("✅ Nuclear Patch v88 (Recorder Fixed) Active.")
 
 @bot.command()
 async def login(ctx, *, key: str):
