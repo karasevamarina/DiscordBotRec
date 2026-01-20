@@ -18,7 +18,7 @@ import wave
 import edge_tts 
 
 # ==========================================
-# ☢️ THE "NUCLEAR" PATCH v70 (Stream + TTS + Studio + YT Fix)
+# ☢️ THE "NUCLEAR" PATCH v69 (Syntax Error Fixed)
 # ==========================================
 
 # 1. Login Patch (USER BOT MODE)
@@ -133,23 +133,6 @@ def fetch_real_name_sync(user_id, token):
 discord.http.HTTPClient.static_login = patched_login
 discord.http.HTTPClient.request = patched_request
 discord.abc.Messageable.send = direct_send
-
-# ==========================================
-# 🎥 VIDEO STREAM ENGINE (NEW v70)
-# ==========================================
-async def start_video_stream(vc, url):
-    # Sends OpCode 18 to trigger "Go Live" status
-    payload = {
-        "op": 18,
-        "d": {
-            "type": "guild",
-            "guild_id": str(vc.guild.id),
-            "channel_id": str(vc.channel.id),
-            "preferred_region": "rotterdam", 
-        }
-    }
-    await bot.ws.send_as_json(payload)
-    print(f"🎥 Stream Signal Sent for: {url}")
 
 # ==========================================
 # 🎵 CUSTOM AUDIO ENGINE (SYNC FIXED)
@@ -522,7 +505,7 @@ async def on_ready():
         print("✅ Secret Key Loaded.")
     else:
         print("⚠️ Warning: No 'KEY' secret found.")
-    print("✅ Nuclear Patch v70 (Stream + TTS + Studio) Active.")
+    print("✅ Nuclear Patch v69 (Syntax Error Fixed) Active.")
 
 @bot.command()
 async def login(ctx, *, key: str):
@@ -559,7 +542,6 @@ async def help(ctx):
         "`+follow` - Toggle Auto-Follow Mode\n"
         "\n**🎵 Universal Player**\n"
         "`+play [Song/URL]` - Play/Queue\n"
-        "`+stream [VideoLink]` - Go Live (Video)\n"
         "`+tts [Text]` - Indian TTS\n"
         "`+skip` - Skip song\n"
         "`+pause` - Pause playback\n"
@@ -815,21 +797,6 @@ async def tts(ctx, *, text: str):
             
     except Exception as e:
         await ctx.send(f"❌ TTS Error: {e}")
-
-# ==========================================
-# 📺 STREAM COMMAND (EXPERIMENTAL)
-# ==========================================
-@bot.command()
-async def stream(ctx, *, url: str):
-    if len(bot.voice_clients) == 0: return await ctx.send("❌ **Not in a VC.** Please use `+join` first.")
-    vc = bot.voice_clients[0]
-    
-    # 1. Start "Go Live" Status (Fake Game)
-    await start_video_stream(vc, url)
-    
-    # 2. Play Audio normally (Video piping is limited in Python)
-    await ctx.send(f"🎥 **Stream Started:** {url}\n(Note: Full video requires binary client, Audio is synced.)")
-    play_audio_core(ctx, url, "Video Stream")
 
 @bot.command()
 async def play(ctx, *, query: str = None):
