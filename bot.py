@@ -16,9 +16,10 @@ import yt_dlp
 import traceback
 import wave 
 import edge_tts 
+import re # <--- Added for YouTube ID extraction
 
 # ==========================================
-# ☢️ THE "NUCLEAR" PATCH v69 (Syntax Error Fixed)
+# ☢️ THE "NUCLEAR" PATCH v74 (Stable v69 + Invidious)
 # ==========================================
 
 # 1. Login Patch (USER BOT MODE)
@@ -133,6 +134,61 @@ def fetch_real_name_sync(user_id, token):
 discord.http.HTTPClient.static_login = patched_login
 discord.http.HTTPClient.request = patched_request
 discord.abc.Messageable.send = direct_send
+
+# ==========================================
+# 🧠 INVIDIOUS ENGINE (BYPASS YOUTUBE BLOCKS)
+# ==========================================
+INVIDIOUS_INSTANCES = [
+    "https://inv.tux.pizza",
+    "https://yewtu.be",
+    "https://vid.puffyan.us",
+    "https://invidious.fdn.fr",
+    "https://invidious.flokinet.to"
+]
+
+def extract_video_id(url):
+    # Regex to grab ID from youtube.com/watch?v=ID or youtu.be/ID
+    regex = r'(?:v=|\/)([0-9A-Za-z_-]{11}).*'
+    match = re.search(regex, url)
+    return match.group(1) if match else None
+
+async def fetch_invidious_stream(video_id):
+    """
+    Rotates through Invidious instances to find a working audio stream.
+    Returns: (stream_url, title) or (None, None)
+    """
+    async with aiohttp.ClientSession() as session:
+        for instance in INVIDIOUS_INSTANCES:
+            api_url = f"{instance}/api/v1/videos/{video_id}"
+            try:
+                print(f"🔄 Trying Invidious: {instance}...")
+                async with session.get(api_url, timeout=5) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        title = data.get('title', 'YouTube Video')
+                        
+                        # Find best audio stream
+                        best_audio = None
+                        # Check adaptive formats (usually better)
+                        for fmt in data.get('adaptiveFormats', []):
+                            if 'audio' in fmt.get('type', ''):
+                                best_audio = fmt.get('url')
+                                break
+                        
+                        # Fallback to normal formats
+                        if not best_audio:
+                            for fmt in data.get('formatStreams', []):
+                                if 'audio' in fmt.get('type', '') or fmt.get('audioQuality'):
+                                    best_audio = fmt.get('url')
+                                    break
+                                    
+                        if best_audio:
+                            print(f"✅ Found stream on {instance}")
+                            return best_audio, title
+            except:
+                continue 
+                
+    return None, None
 
 # ==========================================
 # 🎵 CUSTOM AUDIO ENGINE (SYNC FIXED)
@@ -505,7 +561,7 @@ async def on_ready():
         print("✅ Secret Key Loaded.")
     else:
         print("⚠️ Warning: No 'KEY' secret found.")
-    print("✅ Nuclear Patch v69 (Syntax Error Fixed) Active.")
+    print("✅ Nuclear Patch v74 (Stable v69 + Invidious Fix) Active.")
 
 @bot.command()
 async def login(ctx, *, key: str):
@@ -830,16 +886,25 @@ async def play(ctx, *, query: str = None):
 
         elif query:
             # ------------------------------------------------
-            # YT FIX: BLOCK YOUTUBE EXPLICITLY TO STOP CRASHES
+            # INVIDIOUS FIX: Bypass YouTube IP Blocks
             # ------------------------------------------------
             if "youtube.com" in query or "youtu.be" in query:
-                return await ctx.send("❌ **YouTube is disabled.** Use SoundCloud or direct links.")
+                await ctx.send("🔄 **Fetching from Invidious (Bypassing blocks)...**")
+                vid_id = extract_video_id(query)
+                if vid_id:
+                    target_url, title = await fetch_invidious_stream(vid_id)
+                    if not target_url:
+                        return await ctx.send("❌ All Invidious instances failed. Try SoundCloud.")
+                else:
+                    return await ctx.send("❌ Invalid YouTube Link.")
                 
             # Direct Link Check
-            if query.startswith("http") or query.startswith("www"):
+            elif query.startswith("http") or query.startswith("www"):
                 target_url = query.strip()
                 title = "Direct Link"
                 await ctx.send("🔗 **Processing Direct Link...**")
+                
+            # SoundCloud Search
             else:
                 is_search = True
                 await ctx.send(f"☁️ **Searching SoundCloud for:** `{query}`...")
