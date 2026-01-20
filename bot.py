@@ -15,10 +15,10 @@ import math
 import yt_dlp
 import traceback
 import wave 
-import edge_tts # <--- NEW: Required for TTS
+import edge_tts 
 
 # ==========================================
-# ☢️ THE "NUCLEAR" PATCH v68 (TTS + YT Fix + Studio Master)
+# ☢️ THE "NUCLEAR" PATCH v69 (Syntax Error Fixed)
 # ==========================================
 
 # 1. Login Patch (USER BOT MODE)
@@ -505,7 +505,7 @@ async def on_ready():
         print("✅ Secret Key Loaded.")
     else:
         print("⚠️ Warning: No 'KEY' secret found.")
-    print("✅ Nuclear Patch v68 (TTS + YT Fix) Active.")
+    print("✅ Nuclear Patch v69 (Syntax Error Fixed) Active.")
 
 @bot.command()
 async def login(ctx, *, key: str):
@@ -741,16 +741,21 @@ def play_audio_core(ctx, url, title):
         filters.append(f"volume={VOLUME_LEVEL}")
     if BASS_ACTIVE:
         filters.append("bass=g=20")
+        
+    # Pre-calculate filter string to avoid f-string SyntaxError (FIXED v69)
+    filter_str = ""
+    if filters:
+        filter_str = f' -filter:a "{",".join(filters)}"'
     
     # ----------------------------------------------------
-    # NUCLEAR FIX v68: Detect if Local File or Web Stream
+    # NUCLEAR FIX v69: Detect if Local File or Web Stream
     # ----------------------------------------------------
     if url.startswith("http") or url.startswith("www"):
         # Web Stream Options (Reconnect allowed)
-        opts = {'before_options': '-reconnect 1 -reconnect_streamed 1', 'options': f'-vn{f" -filter:a {','.join(filters)}" if filters else ""}'}
+        opts = {'before_options': '-reconnect 1 -reconnect_streamed 1', 'options': f'-vn{filter_str}'}
     else:
         # Local File Options (NO Reconnect - Fixes TTS silence)
-        opts = {'options': f'-vn{f" -filter:a {','.join(filters)}" if filters else ""}'}
+        opts = {'options': f'-vn{filter_str}'}
     # ----------------------------------------------------
 
     def on_finish(e):
@@ -758,12 +763,10 @@ def play_audio_core(ctx, url, title):
         if os.path.exists(url) and "tts_" in url:
             try: os.remove(url)
             except: pass
-            
-        if error: print(f"Player Error: {error}")
-        coro = ctx.send(f"✅ **Finished:** {title}")
-        asyncio.run_coroutine_threadsafe(coro, bot.loop)
-        play_next_in_queue(ctx)
-
+        if queues.get(get_queue_id(ctx)):
+            t = queues[get_queue_id(ctx)].pop(0)
+            play_audio_core(ctx, t['url'], t['title'])
+    
     try:
         # Use our Custom Recordable Audio Class instead of the standard one
         source = RecordableFFmpegPCMAudio(url, **opts)
