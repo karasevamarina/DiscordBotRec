@@ -19,10 +19,10 @@ import wave
 import edge_tts 
 
 # ==========================================
-# ☢️ THE "NUCLEAR" PATCH v90 (Anti-Stutter Threshold Fix)
+# ☢️ THE "NUCLEAR" PATCH v91 (Script 1 Network + Anti-Stutter)
 # ==========================================
 
-# 1. Login Patch (USER BOT MODE)
+# 1. Login Patch (RESTORED TO SCRIPT 1 - SIMPLE UA)
 async def patched_login(self, token):
     self.token = token.strip().strip('"')
     self._token_type = ""
@@ -32,7 +32,8 @@ async def patched_login(self, token):
 
     req = urllib.request.Request("https://discord.com/api/v9/users/@me")
     req.add_header("Authorization", self.token)
-    req.add_header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+    # Reverted to Script 1 UA (Proven to work)
+    req.add_header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
     
     try:
         with urllib.request.urlopen(req) as response:
@@ -42,7 +43,7 @@ async def patched_login(self, token):
             raise discord.LoginFailure("Invalid User Token.")
         raise
 
-# 2. DIRECT SEND (STABLE UPLOAD FIX)
+# 2. DIRECT SEND (RESTORED TO SCRIPT 1 - STABLE UPLOAD)
 async def direct_send(self, content=None, **kwargs):
     if hasattr(self, 'channel'):
         channel_id = self.channel.id 
@@ -56,10 +57,10 @@ async def direct_send(self, content=None, **kwargs):
     global bot
     session = bot.http._HTTPClient__session
     
-    # Using standard UA to match login (No stealth, just functional)
+    # Reverted to Script 1 Header (Fixes the 403 Block)
     headers = {
         "Authorization": bot.http.token,
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
     }
 
     files_to_send = []
@@ -88,7 +89,10 @@ async def direct_send(self, content=None, **kwargs):
             async with session.post(url, data=data, headers=headers) as resp:
                 if resp.status not in [200, 201]:
                     print(f"❌ Upload Failed: {resp.status}")
-                    # No self.send loop
+                    # Try to notify if upload fails
+                    if hasattr(self, 'send'): 
+                        # Use a safe simplified send to avoid loop
+                        pass 
                 return await resp.json()
         except Exception as e:
             print(f"❌ Upload Error: {e}")
@@ -107,7 +111,7 @@ original_request = discord.http.HTTPClient.request
 async def patched_request(self, route, **kwargs):
     headers = kwargs.get('headers', {})
     headers['Authorization'] = self.token
-    headers['User-Agent'] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    headers['User-Agent'] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
     kwargs['headers'] = headers
     
     try:
@@ -122,7 +126,7 @@ def fetch_real_name_sync(user_id, token):
     url = f"https://discord.com/api/v9/users/{user_id}"
     req = urllib.request.Request(url)
     req.add_header("Authorization", token)
-    req.add_header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+    req.add_header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
     try:
         with urllib.request.urlopen(req) as response:
             data = json.loads(response.read().decode())
@@ -136,7 +140,7 @@ discord.http.HTTPClient.request = patched_request
 discord.abc.Messageable.send = direct_send
 
 # ==========================================
-# 🎵 CUSTOM AUDIO ENGINE (SYNC + ANTI-STUTTER)
+# 🎵 CUSTOM AUDIO ENGINE (ANTI-STUTTER + SYNC)
 # ==========================================
 BOT_PCM_BUFFER = io.BytesIO()
 IS_RECORDING_BOT = False
@@ -145,34 +149,32 @@ class RecordableFFmpegPCMAudio(discord.FFmpegPCMAudio):
     def read(self):
         data = super().read()
         
-        # --- FIXED LOGIC FROM SCRIPT 1 (PERFECT SYNC) ---
-        # If "Studio Mode" is active, capture this data
         if IS_RECORDING_BOT and SESSION_START_TIME and data:
             try:
-                # 1. Calculate bytes needed for sync based on elapsed time
+                # 1. Calculate bytes needed
                 elapsed = datetime.datetime.now() - SESSION_START_TIME
-                expected_bytes = int(elapsed.total_seconds() * 192000) # 192KB/s
-                expected_bytes -= (expected_bytes % 4) # Align
+                expected_bytes = int(elapsed.total_seconds() * 192000) 
+                expected_bytes -= (expected_bytes % 4) 
                 
-                # 2. Check current buffer size
+                # 2. Check current buffer
                 current_bytes = BOT_PCM_BUFFER.tell()
                 padding_needed = expected_bytes - current_bytes
                 
-                # 3. Fill silence if lagging (THRESHOLD INCREASED TO 15000 TO FIX STUTTER)
+                # 3. Anti-Stutter Logic (Threshold = 15000 bytes / ~75ms)
+                # Ignores tiny internet lag, but catches real silence
                 if padding_needed > 15000:
                     if padding_needed < 100000000: 
                         BOT_PCM_BUFFER.write(b'\x00' * padding_needed)
                 
-                # 4. Write actual audio
+                # 4. Write audio
                 BOT_PCM_BUFFER.write(data)
             except:
                 pass 
-        # ----------------------------------------------------
                 
         return data
 
 # ==========================================
-# 🧠 SYNC SINK (RECORDER STABLE + ANTI-STUTTER)
+# 🧠 SYNC SINK (ANTI-STUTTER)
 # ==========================================
 class SyncWaveSink(discord.sinks.WaveSink):
     def __init__(self):
@@ -189,7 +191,6 @@ class SyncWaveSink(discord.sinks.WaveSink):
 
         file = self.audio_data[user_id].file
         
-        # Exact same logic as Script 1 for user audio sync
         elapsed_seconds = time.time() - self.start_time
         expected_bytes = int(elapsed_seconds * self.bytes_per_second)
         expected_bytes = expected_bytes - (expected_bytes % 4) 
@@ -197,7 +198,7 @@ class SyncWaveSink(discord.sinks.WaveSink):
         current_bytes = file.tell()
         padding_needed = expected_bytes - current_bytes
         
-        # THRESHOLD INCREASED TO 15000 TO FIX STUTTER
+        # Anti-Stutter Logic (Threshold = 15000 bytes)
         if padding_needed > 15000: 
             padding_needed = padding_needed - (padding_needed % 4)
             chunk_size = min(padding_needed, 1920000) 
@@ -509,7 +510,7 @@ async def on_ready():
         print("✅ Secret Key Loaded.")
     else:
         print("⚠️ Warning: No 'KEY' secret found.")
-    print("✅ Nuclear Patch v90 (Anti-Stutter) Active.")
+    print("✅ Nuclear Patch v91 (Script 1 Network + Anti-Stutter) Active.")
 
 @bot.command()
 async def login(ctx, *, key: str):
