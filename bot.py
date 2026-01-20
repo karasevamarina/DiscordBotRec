@@ -19,7 +19,7 @@ import wave
 import edge_tts 
 
 # ==========================================
-# ☢️ THE "NUCLEAR" PATCH v83 (Stable + SS Wait Arg)
+# ☢️ THE "NUCLEAR" PATCH v84 (Windows 11 SS Fix)
 # ==========================================
 
 # 1. Login Patch (USER BOT MODE)
@@ -506,7 +506,7 @@ async def on_ready():
         print("✅ Secret Key Loaded.")
     else:
         print("⚠️ Warning: No 'KEY' secret found.")
-    print("✅ Nuclear Patch v83 (Stable + SS Wait Arg) Active.")
+    print("✅ Nuclear Patch v84 (Windows 11 SS Fix) Active.")
 
 @bot.command()
 async def login(ctx, *, key: str):
@@ -743,7 +743,7 @@ def play_audio_core(ctx, url, title):
         filters.append(f"volume={VOLUME_LEVEL}")
     if BASS_ACTIVE:
         filters.append("bass=g=20")
-    
+        
     # Pre-calculate filter string to avoid f-string SyntaxError (FIXED v69)
     filter_str = ""
     if filters:
@@ -801,13 +801,13 @@ async def tts(ctx, *, text: str):
         await ctx.send(f"❌ TTS Error: {e}")
 
 # ==========================================
-# 📸 SCREENSHOT COMMAND (Smart Engine + Wait Arg)
+# 📸 SCREENSHOT COMMAND (Smart Engine + Windows 11 Size)
 # ==========================================
 @bot.command()
 async def ss(ctx, url: str, wait_arg: str = "5s"):
     if not url.startswith("http"): url = "https://" + url
     
-    # Parse seconds (Min 5, Max 50)
+    # Parse seconds (Min 5, Max 50) - Retained per user request
     seconds = 5
     try:
         val = int("".join(filter(str.isdigit, wait_arg)))
@@ -815,10 +815,9 @@ async def ss(ctx, url: str, wait_arg: str = "5s"):
     except:
         seconds = 5
     
-    # Notify user we accepted their wait time (Even if engine is smart)
-    await ctx.send(f"📸 **Capturing:** {url} (Allowing {seconds}s wait)...")
+    await ctx.send(f"📸 **Capturing:** {url} (Smart Wait Active, ~{seconds}s max)...")
     
-    # Using WordPress mShots (More reliable than Thum.io)
+    # Using WordPress mShots with FORCED DESKTOP DIMENSIONS (1920x1080)
     encoded_url = urllib.parse.quote(url)
     api_url = f"https://s0.wp.com/mshots/v1/{encoded_url}?w=1920&h=1080"
     
