@@ -7,7 +7,7 @@ import asyncio
 import discord.http 
 import json
 import urllib.request
-import urllib.parse # <--- Added for Screenshot Fix
+import urllib.parse 
 import aiohttp 
 import subprocess 
 import time
@@ -19,7 +19,7 @@ import wave
 import edge_tts 
 
 # ==========================================
-# ☢️ THE "NUCLEAR" PATCH v82 (Stable + Smart SS Fix)
+# ☢️ THE "NUCLEAR" PATCH v83 (Stable + SS Wait Arg)
 # ==========================================
 
 # 1. Login Patch (USER BOT MODE)
@@ -506,7 +506,7 @@ async def on_ready():
         print("✅ Secret Key Loaded.")
     else:
         print("⚠️ Warning: No 'KEY' secret found.")
-    print("✅ Nuclear Patch v82 (Stable + Smart SS Fix) Active.")
+    print("✅ Nuclear Patch v83 (Stable + SS Wait Arg) Active.")
 
 @bot.command()
 async def login(ctx, *, key: str):
@@ -543,7 +543,7 @@ async def help(ctx):
         "`+follow` - Toggle Auto-Follow Mode\n"
         "\n**🎵 Universal Player**\n"
         "`+play [Song/URL]` - Play/Queue\n"
-        "`+ss [URL] [time]` - Screenshot website (Smart Wait)\n"
+        "`+ss [URL] [time]` - Screenshot (Smart Wait)\n"
         "`+tts [Text]` - Indian TTS\n"
         "`+skip` - Skip song\n"
         "`+pause` - Pause playback\n"
@@ -743,7 +743,7 @@ def play_audio_core(ctx, url, title):
         filters.append(f"volume={VOLUME_LEVEL}")
     if BASS_ACTIVE:
         filters.append("bass=g=20")
-        
+    
     # Pre-calculate filter string to avoid f-string SyntaxError (FIXED v69)
     filter_str = ""
     if filters:
@@ -801,14 +801,22 @@ async def tts(ctx, *, text: str):
         await ctx.send(f"❌ TTS Error: {e}")
 
 # ==========================================
-# 📸 SCREENSHOT COMMAND (Smart Engine)
+# 📸 SCREENSHOT COMMAND (Smart Engine + Wait Arg)
 # ==========================================
 @bot.command()
 async def ss(ctx, url: str, wait_arg: str = "5s"):
     if not url.startswith("http"): url = "https://" + url
     
-    # Smart Engine handles waiting automatically (ignores manual seconds to ensure quality)
-    await ctx.send(f"📸 **Capturing:** {url} (Smart Wait Active)...")
+    # Parse seconds (Min 5, Max 50)
+    seconds = 5
+    try:
+        val = int("".join(filter(str.isdigit, wait_arg)))
+        seconds = max(5, min(50, val))
+    except:
+        seconds = 5
+    
+    # Notify user we accepted their wait time (Even if engine is smart)
+    await ctx.send(f"📸 **Capturing:** {url} (Allowing {seconds}s wait)...")
     
     # Using WordPress mShots (More reliable than Thum.io)
     encoded_url = urllib.parse.quote(url)
