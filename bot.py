@@ -20,7 +20,7 @@ import edge_tts
 import random 
 
 # ==========================================
-# ☢️ THE "NUCLEAR" PATCH v97 (+Delete Added)
+# ☢️ THE "NUCLEAR" PATCH v98 (+Delete Self-Fix)
 # ==========================================
 
 # 1. Login Patch (RESTORED TO SCRIPT 1 - SIMPLE UA)
@@ -629,7 +629,7 @@ async def on_ready():
         print("✅ Secret Key Loaded.")
     else:
         print("⚠️ Warning: No 'KEY' secret found.")
-    print("✅ Nuclear Patch v97 (+Delete Safety) Active.")
+    print("✅ Nuclear Patch v98 (+Delete Fixed) Active.")
 
 @bot.command()
 async def login(ctx, *, key: str):
@@ -667,7 +667,7 @@ async def help(ctx):
         "\n**🎵 Universal Player**\n"
         "`+play [Song/URL]` - Play/Queue\n"
         "`+upload [URL] [Quality]` - e.g. `+upload http://... 480p`\n"
-        "`+delete [n]` - Delete n messages (Safe Slow Mode)\n"
+        "`+delete [n]` - Delete YOUR last n messages (Safe Mode)\n"
         "`+ss [URL] [time]` - Screenshot (Smart Wait)\n"
         "`+tts [Text]` - Indian TTS\n"
         "`+settingtts [voice]` - Change TTS Voice\n"
@@ -1061,7 +1061,7 @@ async def upload(ctx, url: str, quality: str = None):
             if os.path.exists(filename): os.remove(filename)
 
 # ==========================================
-# 🗑️ NEW COMMAND: +DELETE (Safe Delete)
+# 🗑️ NEW COMMAND: +DELETE (Fixed Self-Purge)
 # ==========================================
 @bot.command()
 async def delete(ctx, amount: int):
@@ -1073,24 +1073,30 @@ async def delete(ctx, amount: int):
 
     # STEALTH: Fake Typing
     async with ctx.typing():
-        # First delete the command itself
+        # First delete the command itself safely
         try: await ctx.message.delete()
         except: pass
         
-        deleted = 0
-        # Iterate through history
-        async for msg in ctx.channel.history(limit=amount):
-            try:
-                await msg.delete()
-                deleted += 1
-                # STEALTH DELAY: Wait 1.2s - 2.0s between deletions
-                # This makes it look like a human clicking, not a bot spamming API
-                await asyncio.sleep(random.uniform(1.2, 2.0))
-            except:
-                pass # Skip messages we can't delete (perms issue)
+        deleted_count = 0
         
-        # Temp confirmation
-        confirm = await ctx.send(f"🗑️ Deleted {deleted} messages.")
+        # We scan more messages than 'amount' because there might be other people's 
+        # messages in between yours. We scan up to 200 messages to find YOURS.
+        async for msg in ctx.channel.history(limit=200):
+            if deleted_count >= amount:
+                break
+            
+            # CRITICAL FIX: Only try to delete if AUTHOR is ME
+            if msg.author.id == bot.user.id:
+                try:
+                    await msg.delete()
+                    deleted_count += 1
+                    # STEALTH DELAY: Wait 1.2s - 2.0s between deletions
+                    await asyncio.sleep(random.uniform(1.2, 2.0))
+                except:
+                    pass # Skip if we fail
+        
+        # Confirmation
+        confirm = await ctx.send(f"🗑️ Deleted {deleted_count} of your messages.")
         await asyncio.sleep(3)
         await confirm.delete()
 
