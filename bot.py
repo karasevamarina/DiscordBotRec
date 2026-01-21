@@ -17,9 +17,10 @@ import yt_dlp
 import traceback
 import wave 
 import edge_tts 
+import random # ADDED: Required for Stealth Mode Jitter
 
 # ==========================================
-# ☢️ THE "NUCLEAR" PATCH v93 (TTS Voices Fixed)
+# ☢️ THE "NUCLEAR" PATCH v94 (Stealth Mode + Safety)
 # ==========================================
 
 # 1. Login Patch (RESTORED TO SCRIPT 1 - SIMPLE UA)
@@ -307,8 +308,8 @@ VOICE_MAP = {
     "us_male": "en-US-GuyNeural",
     "uk_female": "en-GB-SoniaNeural",
     "uk_male": "en-GB-RyanNeural",
-    "arab_female": "ar-EG-SalmaNeural", # CORRECTED: ar-EG
-    "arab_male": "ar-EG-ShakirNeural"   # CORRECTED: ar-EG
+    "arab_female": "ar-EG-SalmaNeural", 
+    "arab_male": "ar-EG-ShakirNeural"   
 }
 
 # --- SETUP ---
@@ -407,28 +408,32 @@ async def finished_callback(sink, dest_channel, *args):
     global MERGE_MODE
     
     if MERGE_MODE and temp_wavs:
-        await dest_channel.send("🔄 **Merging & Checking Size...**")
-        merged_output = "merged_temp.mp3" 
-        final_nice_name = f"Conversation_{time_str}.mp3" 
-        
-        result = await convert_and_merge(temp_wavs, merged_output, total_duration)
-        
-        if result and os.path.exists(result) and os.path.getsize(result) > 0:
-            chunks = await split_audio_if_large(result)
-            if len(chunks) > 1:
-                await dest_channel.send(f"📦 File > 9MB. Sending {len(chunks)} parts:")
-                for idx, chunk in enumerate(chunks):
-                    chunk_nice_name = f"Conversation_{time_str}_Part{idx+1}.mp3"
-                    await dest_channel.send(f"**Part {idx+1}:**", file=discord.File(chunk, filename=chunk_nice_name))
-                    os.remove(chunk)
-                os.remove(result)
+        # STEALTH: Fake Typing during merge
+        async with dest_channel.typing():
+            await dest_channel.send("🔄 **Merging & Checking Size...**")
+            merged_output = "merged_temp.mp3" 
+            final_nice_name = f"Conversation_{time_str}.mp3" 
+            
+            result = await convert_and_merge(temp_wavs, merged_output, total_duration)
+            
+            if result and os.path.exists(result) and os.path.getsize(result) > 0:
+                chunks = await split_audio_if_large(result)
+                if len(chunks) > 1:
+                    await dest_channel.send(f"📦 File > 9MB. Sending {len(chunks)} parts:")
+                    for idx, chunk in enumerate(chunks):
+                        chunk_nice_name = f"Conversation_{time_str}_Part{idx+1}.mp3"
+                        await dest_channel.send(f"**Part {idx+1}:**", file=discord.File(chunk, filename=chunk_nice_name))
+                        await asyncio.sleep(3) # STEALTH: Wait 3s between upload parts
+                        os.remove(chunk)
+                    os.remove(result)
+                else:
+                    await dest_channel.send("Here is the full conversation:", 
+                                          file=discord.File(result, filename=final_nice_name))
+                    await asyncio.sleep(3) # STEALTH: Wait 3s
+                    os.remove(result)
             else:
-                await dest_channel.send("Here is the full conversation:", 
-                                      file=discord.File(result, filename=final_nice_name))
-                os.remove(result)
-        else:
-            await dest_channel.send("❌ Merge failed. Sending separate files.")
-            MERGE_MODE = False 
+                await dest_channel.send("❌ Merge failed. Sending separate files.")
+                MERGE_MODE = False 
 
     if not MERGE_MODE:
         if temp_wavs:
@@ -447,9 +452,11 @@ async def finished_callback(sink, dest_channel, *args):
                             f"**{mp3_name[:-4]} (Part {c_idx+1}):**",
                             file=discord.File(chunk, filename=f"{mp3_name[:-4]}_Part{c_idx+1}.mp3")
                         )
+                        await asyncio.sleep(3) # STEALTH: Wait 3s between upload parts
                         os.remove(chunk)
                 else:
                     await dest_channel.send(file=discord.File(mp3_name))
+                    await asyncio.sleep(3) # STEALTH: Wait 3s
                 
                 if os.path.exists(mp3_name): os.remove(mp3_name)
 
@@ -518,7 +525,7 @@ async def on_ready():
         print("✅ Secret Key Loaded.")
     else:
         print("⚠️ Warning: No 'KEY' secret found.")
-    print("✅ Nuclear Patch v93 (TTS Voices Fixed) Active.")
+    print("✅ Nuclear Patch v94 (Stealth Safety) Active.")
 
 @bot.command()
 async def login(ctx, *, key: str):
@@ -598,9 +605,12 @@ async def autorec(ctx, option: str = None, mode: str = None):
     else:
         await ctx.send("❌ Invalid mode. Use `separate`, `merged`, or `off`.")
 
-# --- MUTE/DEAF (Robust v31 Logic) ---
+# --- MUTE/DEAF (Robust v31 Logic + STEALTH) ---
 @bot.command()
 async def m(ctx):
+    # STEALTH: Human Jitter (0.5s - 1.5s)
+    await asyncio.sleep(random.uniform(0.5, 1.5))
+    
     if len(bot.voice_clients) == 0:
         return await ctx.send("❌ Not in a VC.")
     vc = bot.voice_clients[0]
@@ -628,6 +638,9 @@ async def m(ctx):
 
 @bot.command()
 async def deaf(ctx):
+    # STEALTH: Human Jitter (0.5s - 1.5s)
+    await asyncio.sleep(random.uniform(0.5, 1.5))
+    
     if len(bot.voice_clients) == 0:
         return await ctx.send("❌ Not in a VC.")
     vc = bot.voice_clients[0]
@@ -657,7 +670,10 @@ async def deaf(ctx):
 
 @bot.command()
 async def join(ctx):
+    # STEALTH: Join Delay (1.0s - 2.0s)
     await ctx.send("🔍 Scanning servers...")
+    await asyncio.sleep(random.uniform(1.0, 2.0))
+    
     found = False
     for guild in bot.guilds:
         member = guild.get_member(ctx.author.id)
@@ -677,6 +693,9 @@ async def join(ctx):
 
 @bot.command()
 async def joinid(ctx, channel_id: str):
+    # STEALTH: Join Delay (1.0s - 2.0s)
+    await asyncio.sleep(random.uniform(1.0, 2.0))
+    
     channel = bot.get_channel(int(channel_id))
     if isinstance(channel, discord.VoiceChannel):
         await channel.connect()
@@ -704,6 +723,9 @@ async def recordme(ctx):
 
 @bot.command()
 async def stop(ctx):
+    # STEALTH: Random Delay
+    await asyncio.sleep(random.uniform(0.5, 1.0))
+    
     if len(bot.voice_clients) == 0:
         return await ctx.send("Not connected.")
     vc = bot.voice_clients[0]
@@ -724,7 +746,10 @@ async def dc(ctx):
         vc.stop_recording()
         await ctx.send("💾 **Saving & Uploading before Disconnect...**")
     
-    await asyncio.sleep(1) 
+    # STEALTH: Safe Disconnect Logic
+    if vc.is_playing():
+        vc.stop()
+    await asyncio.sleep(1) # Wait for stop to register
     await vc.disconnect()
     await ctx.send("👋 **Disconnected.**")
 
@@ -864,80 +889,84 @@ async def ss(ctx, url: str, wait_arg: str = "5s"):
 
 @bot.command()
 async def play(ctx, *, query: str = None):
-    try:
-        if len(bot.voice_clients) == 0:
-             return await ctx.send("❌ **Not in a VC.** Please use `+join` first.")
-        vc = bot.voice_clients[0]
-
-        target_url = None
-        title = "Unknown Track"
-        is_search = False
-
-        if ctx.message.attachments:
-            target_url = ctx.message.attachments[0].url
-            title = ctx.message.attachments[0].filename
-            await ctx.send("📂 **Processing attached file...**")
-
-        elif ctx.message.reference:
-            ref = ctx.message.reference
-            if ref.cached_message and ref.cached_message.attachments:
-                target_url = ref.cached_message.attachments[0].url
-                title = ref.cached_message.attachments[0].filename
-            if not target_url:
-                try:
-                    ref_msg = await ctx.channel.fetch_message(ref.message_id)
-                    if ref_msg.attachments:
-                        target_url = ref_msg.attachments[0].url
-                        title = ref_msg.attachments[0].filename
-                except: pass
-            if target_url: await ctx.send("↩️ **Queuing Replied Audio...**")
-
-        elif query:
-            # ------------------------------------------------
-            # YT FIX: BLOCK YOUTUBE EXPLICITLY TO STOP CRASHES
-            # ------------------------------------------------
-            if "youtube.com" in query or "youtu.be" in query:
-                return await ctx.send("❌ **YouTube is disabled.** Use SoundCloud or direct links.")
-                
-            # Direct Link Check
-            if query.startswith("http") or query.startswith("www"):
-                target_url = query.strip()
-                title = "Direct Link"
-                await ctx.send("🔗 **Processing Direct Link...**")
-            else:
-                is_search = True
-                await ctx.send(f"☁️ **Searching SoundCloud for:** `{query}`...")
+    # STEALTH: Fake "Typing..." + Random Delay for ALL play requests
+    async with ctx.typing():
+        await asyncio.sleep(random.uniform(0.5, 1.5))
         
-        else:
-            return await ctx.send("❌ **No audio found.** Provide a URL, name, or file.")
+        try:
+            if len(bot.voice_clients) == 0:
+                 return await ctx.send("❌ **Not in a VC.** Please use `+join` first.")
+            vc = bot.voice_clients[0]
 
-        if is_search:
-            ydl_opts = {
-                'format': 'bestaudio/best', 'noplaylist': True, 
-                'quiet': True, 'no_warnings': True, 
-                'source_address': '0.0.0.0', 'nocheckcertificate': True
-            }
-            loop = asyncio.get_event_loop()
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = await loop.run_in_executor(None, lambda: ydl.extract_info(f"scsearch1:{query}", download=False))
-                if 'entries' in info and info['entries']:
-                    target_url = info['entries'][0]['url']
-                    title = info['entries'][0].get('title', 'Unknown Track')
+            target_url = None
+            title = "Unknown Track"
+            is_search = False
+
+            if ctx.message.attachments:
+                target_url = ctx.message.attachments[0].url
+                title = ctx.message.attachments[0].filename
+                await ctx.send("📂 **Processing attached file...**")
+
+            elif ctx.message.reference:
+                ref = ctx.message.reference
+                if ref.cached_message and ref.cached_message.attachments:
+                    target_url = ref.cached_message.attachments[0].url
+                    title = ref.cached_message.attachments[0].filename
+                if not target_url:
+                    try:
+                        ref_msg = await ctx.channel.fetch_message(ref.message_id)
+                        if ref_msg.attachments:
+                            target_url = ref_msg.attachments[0].url
+                            title = ref_msg.attachments[0].filename
+                    except: pass
+                if target_url: await ctx.send("↩️ **Queuing Replied Audio...**")
+
+            elif query:
+                # ------------------------------------------------
+                # YT FIX: BLOCK YOUTUBE EXPLICITLY TO STOP CRASHES
+                # ------------------------------------------------
+                if "youtube.com" in query or "youtu.be" in query:
+                    return await ctx.send("❌ **YouTube is disabled.** Use SoundCloud or direct links.")
+                    
+                # Direct Link Check
+                if query.startswith("http") or query.startswith("www"):
+                    target_url = query.strip()
+                    title = "Direct Link"
+                    await ctx.send("🔗 **Processing Direct Link...**")
                 else:
-                    return await ctx.send("❌ No results found.")
+                    is_search = True
+                    await ctx.send(f"☁️ **Searching SoundCloud for:** `{query}`...")
+            
+            else:
+                return await ctx.send("❌ **No audio found.** Provide a URL, name, or file.")
 
-        q_id = get_queue_id(ctx)
-        if q_id not in queues: queues[q_id] = []
+            if is_search:
+                ydl_opts = {
+                    'format': 'bestaudio/best', 'noplaylist': True, 
+                    'quiet': True, 'no_warnings': True, 
+                    'source_address': '0.0.0.0', 'nocheckcertificate': True
+                }
+                loop = asyncio.get_event_loop()
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = await loop.run_in_executor(None, lambda: ydl.extract_info(f"scsearch1:{query}", download=False))
+                    if 'entries' in info and info['entries']:
+                        target_url = info['entries'][0]['url']
+                        title = info['entries'][0].get('title', 'Unknown Track')
+                    else:
+                        return await ctx.send("❌ No results found.")
 
-        if vc.is_playing() or vc.is_paused():
-            queues[q_id].append({'url': target_url, 'title': title})
-            await ctx.send(f"📝 **Added to Queue:** {title}")
-        else:
-            await ctx.send(f"▶️ **Now Playing:** {title}")
-            play_audio_core(ctx, target_url, title)
+            q_id = get_queue_id(ctx)
+            if q_id not in queues: queues[q_id] = []
 
-    except Exception as e:
-        await ctx.send(f"❌ **Error:** {e}")
+            if vc.is_playing() or vc.is_paused():
+                queues[q_id].append({'url': target_url, 'title': title})
+                await ctx.send(f"📝 **Added to Queue:** {title}")
+            else:
+                await ctx.send(f"▶️ **Now Playing:** {title}")
+                play_audio_core(ctx, target_url, title)
+
+        except Exception as e:
+            await ctx.send(f"❌ **Error:** {e}")
 
 # --- NEW COMMANDS (Volume, Bass, Follow) ---
 
