@@ -20,7 +20,7 @@ import edge_tts
 import random 
 
 # ==========================================
-# ☢️ THE "NUCLEAR" PATCH v96 (Quality Compressor + Splitter)
+# ☢️ THE "NUCLEAR" PATCH v97 (+Delete Added)
 # ==========================================
 
 # 1. Login Patch (RESTORED TO SCRIPT 1 - SIMPLE UA)
@@ -629,7 +629,7 @@ async def on_ready():
         print("✅ Secret Key Loaded.")
     else:
         print("⚠️ Warning: No 'KEY' secret found.")
-    print("✅ Nuclear Patch v96 (Quality Compressor + Splitter) Active.")
+    print("✅ Nuclear Patch v97 (+Delete Safety) Active.")
 
 @bot.command()
 async def login(ctx, *, key: str):
@@ -667,6 +667,7 @@ async def help(ctx):
         "\n**🎵 Universal Player**\n"
         "`+play [Song/URL]` - Play/Queue\n"
         "`+upload [URL] [Quality]` - e.g. `+upload http://... 480p`\n"
+        "`+delete [n]` - Delete n messages (Safe Slow Mode)\n"
         "`+ss [URL] [time]` - Screenshot (Smart Wait)\n"
         "`+tts [Text]` - Indian TTS\n"
         "`+settingtts [voice]` - Change TTS Voice\n"
@@ -1058,6 +1059,40 @@ async def upload(ctx, url: str, quality: str = None):
         except Exception as e:
             await ctx.send(f"❌ Upload Error: {e}")
             if os.path.exists(filename): os.remove(filename)
+
+# ==========================================
+# 🗑️ NEW COMMAND: +DELETE (Safe Delete)
+# ==========================================
+@bot.command()
+async def delete(ctx, amount: int):
+    # SAFETY LIMITS
+    if amount < 1:
+        return await ctx.send("❌ Minimum 1 message.")
+    if amount > 50:
+        return await ctx.send("⚠️ Safety Limit: 50 messages max to prevent bans.")
+
+    # STEALTH: Fake Typing
+    async with ctx.typing():
+        # First delete the command itself
+        try: await ctx.message.delete()
+        except: pass
+        
+        deleted = 0
+        # Iterate through history
+        async for msg in ctx.channel.history(limit=amount):
+            try:
+                await msg.delete()
+                deleted += 1
+                # STEALTH DELAY: Wait 1.2s - 2.0s between deletions
+                # This makes it look like a human clicking, not a bot spamming API
+                await asyncio.sleep(random.uniform(1.2, 2.0))
+            except:
+                pass # Skip messages we can't delete (perms issue)
+        
+        # Temp confirmation
+        confirm = await ctx.send(f"🗑️ Deleted {deleted} messages.")
+        await asyncio.sleep(3)
+        await confirm.delete()
 
 @bot.command()
 async def play(ctx, *, query: str = None):
