@@ -17,10 +17,10 @@ import yt_dlp
 import traceback
 import wave 
 import edge_tts 
-import random # ADDED: Required for Stealth Mode Jitter
+import random 
 
 # ==========================================
-# ☢️ THE "NUCLEAR" PATCH v94 (Stealth Mode + Safety)
+# ☢️ THE "NUCLEAR" PATCH v95 (Stable Upload + Splitter)
 # ==========================================
 
 # 1. Login Patch (RESTORED TO SCRIPT 1 - SIMPLE UA)
@@ -33,7 +33,6 @@ async def patched_login(self, token):
 
     req = urllib.request.Request("https://discord.com/api/v9/users/@me")
     req.add_header("Authorization", self.token)
-    # Reverted to Script 1 UA (Proven to work)
     req.add_header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
     
     try:
@@ -58,7 +57,6 @@ async def direct_send(self, content=None, **kwargs):
     global bot
     session = bot.http._HTTPClient__session
     
-    # Reverted to Script 1 Header (Fixes the 403 Block)
     headers = {
         "Authorization": bot.http.token,
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
@@ -241,6 +239,54 @@ async def split_audio_if_large(filepath, limit_mb=9):
             
     return parts
 
+# === NEW: SMART VIDEO SPLITTER FOR +UPLOAD ===
+async def get_media_duration(filename):
+    cmd = ['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', filename]
+    try:
+        process = await asyncio.create_subprocess_exec(*cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        out, err = await process.communicate()
+        return float(out.decode().strip())
+    except:
+        return None
+
+async def split_media_smart(filepath, limit_mb=8.5): # 8.5MB to be safe for 9MB limit
+    if not os.path.exists(filepath): return []
+    size = os.path.getsize(filepath) / (1024 * 1024)
+    if size <= limit_mb: return [filepath]
+    
+    duration = await get_media_duration(filepath)
+    if not duration: return [filepath] # Cannot determine split, try sending whole
+    
+    # Calculate chunk duration based on size ratio
+    # e.g. 50MB file, 8.5MB limit = 6 chunks. Duration 60s -> 10s chunks.
+    segment_time = (limit_mb / size) * duration
+    
+    base, ext = os.path.splitext(filepath)
+    output_pattern = f"{base}_part%03d{ext}"
+    
+    cmd = [
+        'ffmpeg', '-y', '-i', filepath,
+        '-c', 'copy',
+        '-f', 'segment',
+        '-segment_time', str(segment_time),
+        '-reset_timestamps', '1',
+        output_pattern
+    ]
+    
+    process = await asyncio.create_subprocess_exec(*cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    await process.communicate()
+    
+    parts = []
+    i = 0
+    while True:
+        part = f"{base}_part{i:03d}{ext}"
+        if os.path.exists(part):
+            parts.append(part)
+            i += 1
+        else:
+            break
+    return parts
+
 async def convert_and_merge(file_list, output_filename, duration):
     if not file_list: return None
     
@@ -293,6 +339,9 @@ AUTHORIZED_USERS = set()
 MERGE_MODE = False
 SESSION_START_TIME = None 
 AUTO_REC_MODE = None 
+
+# MEMORY FOR STABLE FOLLOW
+CURRENT_RECORDING_CONFIG = {"merge": False, "bot_audio": False}
 
 # AUDIO FX GLOBALS
 VOLUME_LEVEL = 1.0 
@@ -472,7 +521,12 @@ async def start_recording_logic(ctx, merge_flag, capture_bot=False):
     if vc.recording:
         return await ctx.send("⚠️ Already recording.")
 
-    global MERGE_MODE, SESSION_START_TIME, IS_RECORDING_BOT, BOT_PCM_BUFFER
+    global MERGE_MODE, SESSION_START_TIME, IS_RECORDING_BOT, BOT_PCM_BUFFER, CURRENT_RECORDING_CONFIG
+    
+    # SAVE CONFIG FOR STABLE FOLLOW
+    CURRENT_RECORDING_CONFIG["merge"] = merge_flag
+    CURRENT_RECORDING_CONFIG["bot_audio"] = capture_bot
+
     MERGE_MODE = merge_flag
     IS_RECORDING_BOT = capture_bot
     SESSION_START_TIME = datetime.datetime.now() 
@@ -494,11 +548,12 @@ async def start_recording_logic(ctx, merge_flag, capture_bot=False):
         mode_str = "STUDIO MODE (Users + Bot)"
     else:
         mode_str = "Merged" if merge_flag else "Synced"
-        
-    await ctx.send(f"🔴 **Recording Started [{mode_str}] at {start_time} IST!**")
+    
+    if hasattr(ctx, 'send'):
+        await ctx.send(f"🔴 **Recording Started [{mode_str}] at {start_time} IST!**")
 
 # ==========================================
-# 🐕 FOLLOW MODE EVENT
+# 🐕 STABLE FOLLOW MODE (CRASH FIX)
 # ==========================================
 @bot.event
 async def on_voice_state_update(member, before, after):
@@ -507,12 +562,40 @@ async def on_voice_state_update(member, before, after):
     if after.channel is not None and after.channel != before.channel:
         try:
             vc = member.guild.voice_client
+            
+            # Helper for Restarting
+            class FakeCtx:
+                def __init__(self, ch, g): self.channel = ch; self.guild = g
+                async def send(self, msg): print(msg)
+
             if not vc:
+                await asyncio.sleep(random.uniform(1.5, 3.0))
                 await after.channel.connect()
                 print(f"🐕 Followed to {after.channel.name}")
+                if AUTO_REC_MODE:
+                    await asyncio.sleep(2)
+                    is_merge = (AUTO_REC_MODE == 'merged')
+                    await start_recording_logic(FakeCtx(after.channel, member.guild), is_merge, False)
+
             elif vc.channel.id != after.channel.id:
+                print("🐕 Moving...")
+                
+                # CRITICAL STABILITY FIX: STOP before Move
+                was_recording = vc.recording
+                if was_recording:
+                    vc.stop_recording()
+                    await asyncio.sleep(4) # Wait for upload
+                
                 await vc.move_to(after.channel)
                 print(f"🐕 Moved to {after.channel.name}")
+                
+                # RESTART with saved config
+                if was_recording:
+                    await asyncio.sleep(2)
+                    restore_merge = CURRENT_RECORDING_CONFIG.get("merge", False)
+                    restore_bot = CURRENT_RECORDING_CONFIG.get("bot_audio", False)
+                    await start_recording_logic(FakeCtx(after.channel, member.guild), restore_merge, restore_bot)
+
         except Exception as e:
             print(f"Follow Error: {e}")
 
@@ -525,7 +608,7 @@ async def on_ready():
         print("✅ Secret Key Loaded.")
     else:
         print("⚠️ Warning: No 'KEY' secret found.")
-    print("✅ Nuclear Patch v94 (Stealth Safety) Active.")
+    print("✅ Nuclear Patch v95 (Stable Upload & Splitter) Active.")
 
 @bot.command()
 async def login(ctx, *, key: str):
@@ -562,6 +645,7 @@ async def help(ctx):
         "`+follow` - Toggle Auto-Follow Mode\n"
         "\n**🎵 Universal Player**\n"
         "`+play [Song/URL]` - Play/Queue\n"
+        "`+upload [URL]` - Download & Auto-Split Video (>9MB)\n"
         "`+ss [URL] [time]` - Screenshot (Smart Wait)\n"
         "`+tts [Text]` - Indian TTS\n"
         "`+settingtts [voice]` - Change TTS Voice\n"
@@ -886,6 +970,59 @@ async def ss(ctx, url: str, wait_arg: str = "5s"):
                     await ctx.send("❌ Screenshot API failed.")
     except Exception as e:
         await ctx.send(f"❌ Error: {e}")
+
+# ==========================================
+# 📥 NEW COMMAND: +UPLOAD (Universal Downloader)
+# ==========================================
+@bot.command()
+async def upload(ctx, url: str):
+    if not url.startswith("http"):
+        return await ctx.send("❌ Invalid URL.")
+
+    # STEALTH: Fake Typing
+    async with ctx.typing():
+        await asyncio.sleep(random.uniform(0.5, 1.5))
+        await ctx.send("📥 **Downloading File...**")
+
+        try:
+            filename = f"downloaded_{int(time.time())}.mp4" # Temp generic name
+            
+            # 1. Download File
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url) as resp:
+                    if resp.status == 200:
+                        # Try to detect extension
+                        ctype = resp.headers.get('Content-Type', '')
+                        if 'image' in ctype: filename = filename.replace('.mp4', '.png')
+                        elif 'audio' in ctype: filename = filename.replace('.mp4', '.mp3')
+                        
+                        with open(filename, 'wb') as f:
+                            async for chunk in resp.content.iter_chunked(1024):
+                                f.write(chunk)
+                    else:
+                        return await ctx.send(f"❌ Failed to download: {resp.status}")
+
+            # 2. Check Size & Split if needed
+            if os.path.getsize(filename) > 0:
+                chunks = await split_media_smart(filename, limit_mb=8.5) # 8.5MB safe limit
+                
+                if len(chunks) > 1:
+                    await ctx.send(f"📦 File is large (>9MB). Sending {len(chunks)} parts:")
+                    for idx, chunk in enumerate(chunks):
+                        await ctx.send(f"**Part {idx+1}:**", file=discord.File(chunk))
+                        await asyncio.sleep(3) # STEALTH: Wait 3s between parts
+                        os.remove(chunk)
+                else:
+                    await ctx.send("✅ **Upload Complete:**", file=discord.File(filename))
+                    await asyncio.sleep(3)
+                
+                if os.path.exists(filename): os.remove(filename)
+            else:
+                await ctx.send("❌ Downloaded file is empty.")
+                
+        except Exception as e:
+            await ctx.send(f"❌ Upload Error: {e}")
+            if os.path.exists(filename): os.remove(filename)
 
 @bot.command()
 async def play(ctx, *, query: str = None):
