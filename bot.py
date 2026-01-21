@@ -20,7 +20,7 @@ import edge_tts
 import random 
 
 # ==========================================
-# ☢️ THE "NUCLEAR" PATCH v95 (Stable Upload + Splitter)
+# ☢️ THE "NUCLEAR" PATCH v96 (Quality Compressor + Splitter)
 # ==========================================
 
 # 1. Login Patch (RESTORED TO SCRIPT 1 - SIMPLE UA)
@@ -239,7 +239,7 @@ async def split_audio_if_large(filepath, limit_mb=9):
             
     return parts
 
-# === NEW: SMART VIDEO SPLITTER FOR +UPLOAD ===
+# === NEW: SMART VIDEO SPLITTER & COMPRESSOR FOR +UPLOAD ===
 async def get_media_duration(filename):
     cmd = ['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', filename]
     try:
@@ -249,16 +249,37 @@ async def get_media_duration(filename):
     except:
         return None
 
+async def compress_video(filepath, target_height):
+    base, ext = os.path.splitext(filepath)
+    output_path = f"{base}_compressed_{target_height}p{ext}"
+    
+    # FFmpeg scale command: Scale height, maintain aspect ratio, CRF 28 (compressed)
+    cmd = [
+        'ffmpeg', '-y', 
+        '-i', filepath,
+        '-vf', f'scale=-2:{target_height}', 
+        '-c:v', 'libx264', 
+        '-crf', '28', 
+        '-preset', 'fast', 
+        '-c:a', 'copy', 
+        output_path
+    ]
+    
+    process = await asyncio.create_subprocess_exec(*cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    await process.communicate()
+    
+    if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+        return output_path
+    return filepath # Return original if fail
+
 async def split_media_smart(filepath, limit_mb=8.5): # 8.5MB to be safe for 9MB limit
     if not os.path.exists(filepath): return []
     size = os.path.getsize(filepath) / (1024 * 1024)
     if size <= limit_mb: return [filepath]
     
     duration = await get_media_duration(filepath)
-    if not duration: return [filepath] # Cannot determine split, try sending whole
+    if not duration: return [filepath] 
     
-    # Calculate chunk duration based on size ratio
-    # e.g. 50MB file, 8.5MB limit = 6 chunks. Duration 60s -> 10s chunks.
     segment_time = (limit_mb / size) * duration
     
     base, ext = os.path.splitext(filepath)
@@ -608,7 +629,7 @@ async def on_ready():
         print("✅ Secret Key Loaded.")
     else:
         print("⚠️ Warning: No 'KEY' secret found.")
-    print("✅ Nuclear Patch v95 (Stable Upload & Splitter) Active.")
+    print("✅ Nuclear Patch v96 (Quality Compressor + Splitter) Active.")
 
 @bot.command()
 async def login(ctx, *, key: str):
@@ -645,7 +666,7 @@ async def help(ctx):
         "`+follow` - Toggle Auto-Follow Mode\n"
         "\n**🎵 Universal Player**\n"
         "`+play [Song/URL]` - Play/Queue\n"
-        "`+upload [URL]` - Download & Auto-Split Video (>9MB)\n"
+        "`+upload [URL] [Quality]` - e.g. `+upload http://... 480p`\n"
         "`+ss [URL] [time]` - Screenshot (Smart Wait)\n"
         "`+tts [Text]` - Indian TTS\n"
         "`+settingtts [voice]` - Change TTS Voice\n"
@@ -972,10 +993,10 @@ async def ss(ctx, url: str, wait_arg: str = "5s"):
         await ctx.send(f"❌ Error: {e}")
 
 # ==========================================
-# 📥 NEW COMMAND: +UPLOAD (Universal Downloader)
+# 📥 NEW COMMAND: +UPLOAD (With Quality Selector)
 # ==========================================
 @bot.command()
-async def upload(ctx, url: str):
+async def upload(ctx, url: str, quality: str = None):
     if not url.startswith("http"):
         return await ctx.send("❌ Invalid URL.")
 
@@ -985,13 +1006,12 @@ async def upload(ctx, url: str):
         await ctx.send("📥 **Downloading File...**")
 
         try:
-            filename = f"downloaded_{int(time.time())}.mp4" # Temp generic name
+            filename = f"downloaded_{int(time.time())}.mp4" 
             
             # 1. Download File
             async with aiohttp.ClientSession() as session:
                 async with session.get(url) as resp:
                     if resp.status == 200:
-                        # Try to detect extension
                         ctype = resp.headers.get('Content-Type', '')
                         if 'image' in ctype: filename = filename.replace('.mp4', '.png')
                         elif 'audio' in ctype: filename = filename.replace('.mp4', '.mp3')
@@ -1002,9 +1022,24 @@ async def upload(ctx, url: str):
                     else:
                         return await ctx.send(f"❌ Failed to download: {resp.status}")
 
-            # 2. Check Size & Split if needed
+            # 2. Quality Compression (If requested)
+            if quality and 'mp4' in filename:
+                target_height = None
+                if '720' in quality: target_height = 720
+                elif '480' in quality: target_height = 480
+                elif '360' in quality: target_height = 360
+                elif '240' in quality: target_height = 240
+                
+                if target_height:
+                    await ctx.send(f"📉 **Compressing to {target_height}p...** (This reduces file size)")
+                    compressed_name = await compress_video(filename, target_height)
+                    if compressed_name != filename:
+                        os.remove(filename) # Remove big original
+                        filename = compressed_name
+
+            # 3. Check Size & Split if needed
             if os.path.getsize(filename) > 0:
-                chunks = await split_media_smart(filename, limit_mb=8.5) # 8.5MB safe limit
+                chunks = await split_media_smart(filename, limit_mb=8.5) 
                 
                 if len(chunks) > 1:
                     await ctx.send(f"📦 File is large (>9MB). Sending {len(chunks)} parts:")
