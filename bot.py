@@ -20,7 +20,7 @@ import edge_tts
 import random 
 
 # ==========================================
-# ☢️ THE "NUCLEAR" PATCH v101 (Hard-Wired Sync)
+# ☢️ THE "NUCLEAR" PATCH v103 (Stable Internet + Anti-Cutoff)
 # ==========================================
 
 # 1. Login Patch (RESTORED TO SCRIPT 1 - SIMPLE UA)
@@ -135,7 +135,7 @@ discord.http.HTTPClient.request = patched_request
 discord.abc.Messageable.send = direct_send
 
 # ==========================================
-# 🎵 CUSTOM AUDIO ENGINE (MASTER CLOCK v101)
+# 🎵 CUSTOM AUDIO ENGINE (MASTER CLOCK + ANTI-STUTTER)
 # ==========================================
 BOT_PCM_BUFFER = io.BytesIO()
 IS_RECORDING_BOT = False
@@ -144,7 +144,7 @@ class RecordableFFmpegPCMAudio(discord.FFmpegPCMAudio):
     def read(self):
         data = super().read()
         
-        # Uses GLOBAL SESSION_START_TIME for perfect match
+        # Uses GLOBAL SESSION_START_TIME
         if IS_RECORDING_BOT and SESSION_START_TIME and data:
             try:
                 # 1. Calculate bytes needed from Master Clock
@@ -156,8 +156,9 @@ class RecordableFFmpegPCMAudio(discord.FFmpegPCMAudio):
                 current_bytes = BOT_PCM_BUFFER.tell()
                 padding_needed = expected_bytes - current_bytes
                 
-                # 3. Uncapped Silence Injection (Fixes TTS shifting)
-                if padding_needed > 2000:
+                # 3. ANTI-STUTTER: Threshold restored to 15000 (~75ms)
+                # This prevents filling tiny internet lag spikes with silence
+                if padding_needed > 15000:
                     BOT_PCM_BUFFER.write(b'\x00' * padding_needed)
                 
                 # 4. Write audio
@@ -168,10 +169,10 @@ class RecordableFFmpegPCMAudio(discord.FFmpegPCMAudio):
         return data
 
 # ==========================================
-# 🧠 SYNC SINK (MASTER CLOCK v101)
+# 🧠 SYNC SINK (MASTER CLOCK + ANTI-STUTTER)
 # ==========================================
 class SyncWaveSink(discord.sinks.WaveSink):
-    # FIX: We now FORCE the start_time to be passed in
+    # FORCE Master Clock to prevent drift
     def __init__(self, master_start_time=None):
         super().__init__()
         if master_start_time:
@@ -195,8 +196,9 @@ class SyncWaveSink(discord.sinks.WaveSink):
         current_bytes = file.tell()
         padding_needed = expected_bytes - current_bytes
         
-        # Uncapped Silence Injection
-        if padding_needed > 2000: 
+        # ANTI-STUTTER: Restored to 15000 (~75ms)
+        # This protects against bad internet buffering sounds
+        if padding_needed > 15000: 
             padding_needed = padding_needed - (padding_needed % 4)
             file.write(b'\x00' * padding_needed)
             
@@ -605,7 +607,6 @@ async def on_voice_state_update(member, before, after):
             elif vc.channel.id != after.channel.id:
                 print("🐕 Moving...")
                 
-                # CRITICAL STABILITY FIX: STOP before Move
                 was_recording = vc.recording
                 if was_recording:
                     vc.stop_recording()
@@ -614,7 +615,6 @@ async def on_voice_state_update(member, before, after):
                 await vc.move_to(after.channel)
                 print(f"🐕 Moved to {after.channel.name}")
                 
-                # RESTART with saved config
                 if was_recording:
                     await asyncio.sleep(2)
                     restore_merge = CURRENT_RECORDING_CONFIG.get("merge", False)
@@ -633,7 +633,7 @@ async def on_ready():
         print("✅ Secret Key Loaded.")
     else:
         print("⚠️ Warning: No 'KEY' secret found.")
-    print("✅ Nuclear Patch v101 (Master Clock Hard-Wire) Active.")
+    print("✅ Nuclear Patch v103 (Stable Internet + Anti-Cutoff) Active.")
 
 @bot.command()
 async def login(ctx, *, key: str):
@@ -663,8 +663,8 @@ async def help(ctx):
         "`+record` - Synced Separate Files (Voices Only)\n"
         "`+recordall` - Synced & Merged File (Voices Only)\n"
         "`+recordme` - **STUDIO MODE** (Voices + Music Synced)\n"
-        "`+stop` - Stop & Upload\n"
-        "`+dc` - Stop & Disconnect\n"
+        "`+stop` - Stop & Upload (Anti-Cutoff Safe)\n"
+        "`+dc` - Stop & Disconnect (Anti-Cutoff Safe)\n"
         "`+m` - Toggle Mute\n"
         "`+deaf` - Toggle Deafen\n"
         "`+follow` - Toggle Auto-Follow Mode\n"
@@ -831,6 +831,7 @@ async def recordme(ctx):
     # This is the new command for Studio Mode
     await start_recording_logic(ctx, True, True)
 
+# === UPDATED STOP COMMAND (ANTI-CUTOFF) ===
 @bot.command()
 async def stop(ctx):
     # STEALTH: Random Delay
@@ -841,11 +842,16 @@ async def stop(ctx):
     vc = bot.voice_clients[0]
     
     if vc.recording:
+        # ANTI-CUTOFF: Wait 2.5s for audio packets to arrive
+        await ctx.send("💾 **Saving... (Capturing last seconds)**")
+        await asyncio.sleep(2.5) 
+        
         vc.stop_recording()
-        await ctx.send("💾 **Saving & Uploading... (Bot will stay in VC)**")
+        await ctx.send("✅ **Uploading...**")
     else:
         await ctx.send("❓ Not recording.")
 
+# === UPDATED DC COMMAND (ANTI-CUTOFF) ===
 @bot.command()
 async def dc(ctx):
     if len(bot.voice_clients) == 0:
@@ -853,8 +859,12 @@ async def dc(ctx):
     vc = bot.voice_clients[0]
     
     if vc.recording:
+        # ANTI-CUTOFF: Wait 2.5s here too
+        await ctx.send("💾 **Saving... (Capturing last seconds)**")
+        await asyncio.sleep(2.5)
+        
         vc.stop_recording()
-        await ctx.send("💾 **Saving & Uploading before Disconnect...**")
+        await ctx.send("✅ **Uploading before Disconnect...**")
     
     # STEALTH: Safe Disconnect Logic
     if vc.is_playing():
