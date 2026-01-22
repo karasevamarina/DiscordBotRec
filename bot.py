@@ -20,7 +20,7 @@ import edge_tts
 import random 
 
 # ==========================================
-# ☢️ THE "NUCLEAR" PATCH v99 (Alignment Fix)
+# ☢️ THE "NUCLEAR" PATCH v100 (Uncapped Sync Fix)
 # ==========================================
 
 # 1. Login Patch (RESTORED TO SCRIPT 1 - SIMPLE UA)
@@ -135,7 +135,7 @@ discord.http.HTTPClient.request = patched_request
 discord.abc.Messageable.send = direct_send
 
 # ==========================================
-# 🎵 CUSTOM AUDIO ENGINE (ANTI-STUTTER + SYNC)
+# 🎵 CUSTOM AUDIO ENGINE (FIXED SYNC v100)
 # ==========================================
 BOT_PCM_BUFFER = io.BytesIO()
 IS_RECORDING_BOT = False
@@ -144,20 +144,22 @@ class RecordableFFmpegPCMAudio(discord.FFmpegPCMAudio):
     def read(self):
         data = super().read()
         
+        # Use precise time.time() instead of datetime to match SyncWaveSink
         if IS_RECORDING_BOT and SESSION_START_TIME and data:
             try:
-                # 1. Calculate bytes needed
-                elapsed = datetime.datetime.now() - SESSION_START_TIME
-                expected_bytes = int(elapsed.total_seconds() * 192000) 
+                # 1. Calculate bytes needed based on GLOBAL clock
+                elapsed = time.time() - SESSION_START_TIME
+                expected_bytes = int(elapsed * 192000) 
                 expected_bytes -= (expected_bytes % 4) 
                 
                 # 2. Check current buffer
                 current_bytes = BOT_PCM_BUFFER.tell()
                 padding_needed = expected_bytes - current_bytes
                 
-                # 3. Anti-Stutter Logic (Threshold = 15000 bytes / ~75ms)
-                if padding_needed > 15000:
-                    if padding_needed < 100000000: 
+                # 3. FIX: Removed the 'min' cap. If we need 5s of silence, write 5s.
+                if padding_needed > 0:
+                    # Only pad if gap is significant (>10ms) to avoid micro-stutter
+                    if padding_needed > 2000:
                         BOT_PCM_BUFFER.write(b'\x00' * padding_needed)
                 
                 # 4. Write audio
@@ -168,24 +170,22 @@ class RecordableFFmpegPCMAudio(discord.FFmpegPCMAudio):
         return data
 
 # ==========================================
-# 🧠 SYNC SINK (ANTI-STUTTER & ALIGNMENT FIX)
+# 🧠 SYNC SINK (FIXED SYNC v100)
 # ==========================================
 class SyncWaveSink(discord.sinks.WaveSink):
     def __init__(self):
         super().__init__()
-        # FIX: Start timer IMMEDIATELY on init, not on first packet.
-        # This prevents the "shifting left" bug if users are silent at start.
+        # FIX: Start timer IMMEDIATELY on init.
         self.start_time = time.time() 
         self.bytes_per_second = 192000
 
     def write(self, data, user_id):
-        # NOTE: self.start_time is now guaranteed to be set in __init__
-        
         if user_id not in self.audio_data:
             self.audio_data[user_id] = discord.sinks.core.AudioData(io.BytesIO())
 
         file = self.audio_data[user_id].file
         
+        # Consistent Clock Logic
         elapsed_seconds = time.time() - self.start_time
         expected_bytes = int(elapsed_seconds * self.bytes_per_second)
         expected_bytes = expected_bytes - (expected_bytes % 4) 
@@ -193,13 +193,10 @@ class SyncWaveSink(discord.sinks.WaveSink):
         current_bytes = file.tell()
         padding_needed = expected_bytes - current_bytes
         
-        # Anti-Stutter & Alignment Logic
-        # If user was silent for 10s, padding_needed will be huge.
-        # We write silence to fill that gap, ensuring sync.
-        if padding_needed > 15000: 
+        # FIX: Removed the 'min' cap here too. Alignment is priority.
+        if padding_needed > 2000: 
             padding_needed = padding_needed - (padding_needed % 4)
-            chunk_size = min(padding_needed, 1920000) 
-            file.write(b'\x00' * chunk_size)
+            file.write(b'\x00' * padding_needed)
             
         file.write(data)
 
@@ -423,8 +420,9 @@ async def finished_callback(sink, dest_channel, *args):
     
     IS_RECORDING_BOT = False
     
+    # Precise Duration Calculation
     if SESSION_START_TIME:
-        total_duration = (datetime.datetime.now() - SESSION_START_TIME).total_seconds()
+        total_duration = time.time() - SESSION_START_TIME
     else:
         total_duration = 10 
         
@@ -553,7 +551,9 @@ async def start_recording_logic(ctx, merge_flag, capture_bot=False):
 
     MERGE_MODE = merge_flag
     IS_RECORDING_BOT = capture_bot
-    SESSION_START_TIME = datetime.datetime.now() 
+    
+    # UNIFIED TIME START
+    SESSION_START_TIME = time.time() 
     
     # Reset Bot Buffer
     BOT_PCM_BUFFER.seek(0)
@@ -632,7 +632,7 @@ async def on_ready():
         print("✅ Secret Key Loaded.")
     else:
         print("⚠️ Warning: No 'KEY' secret found.")
-    print("✅ Nuclear Patch v99 (Perfect Sync Fix) Active.")
+    print("✅ Nuclear Patch v100 (Uncapped Sync & Unified Time) Active.")
 
 @bot.command()
 async def login(ctx, *, key: str):
@@ -1062,46 +1062,6 @@ async def upload(ctx, url: str, quality: str = None):
         except Exception as e:
             await ctx.send(f"❌ Upload Error: {e}")
             if os.path.exists(filename): os.remove(filename)
-
-# ==========================================
-# 🗑️ NEW COMMAND: +DELETE (Fixed Self-Purge)
-# ==========================================
-@bot.command()
-async def delete(ctx, amount: int):
-    # SAFETY LIMITS
-    if amount < 1:
-        return await ctx.send("❌ Minimum 1 message.")
-    if amount > 50:
-        return await ctx.send("⚠️ Safety Limit: 50 messages max to prevent bans.")
-
-    # STEALTH: Fake Typing
-    async with ctx.typing():
-        # First delete the command itself safely
-        try: await ctx.message.delete()
-        except: pass
-        
-        deleted_count = 0
-        
-        # We scan more messages than 'amount' because there might be other people's 
-        # messages in between yours. We scan up to 200 messages to find YOURS.
-        async for msg in ctx.channel.history(limit=200):
-            if deleted_count >= amount:
-                break
-            
-            # CRITICAL FIX: Only try to delete if AUTHOR is ME
-            if msg.author.id == bot.user.id:
-                try:
-                    await msg.delete()
-                    deleted_count += 1
-                    # STEALTH DELAY: Wait 1.2s - 2.0s between deletions
-                    await asyncio.sleep(random.uniform(1.2, 2.0))
-                except:
-                    pass # Skip if we fail
-        
-        # Confirmation
-        confirm = await ctx.send(f"🗑️ Deleted {deleted_count} of your messages.")
-        await asyncio.sleep(3)
-        await confirm.delete()
 
 @bot.command()
 async def play(ctx, *, query: str = None):
