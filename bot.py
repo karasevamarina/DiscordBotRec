@@ -20,7 +20,7 @@ import edge_tts
 import random 
 
 # ==========================================
-# ☢️ THE "NUCLEAR" PATCH v100 (Uncapped Sync Fix)
+# ☢️ THE "NUCLEAR" PATCH v101 (Master Clock Alignment)
 # ==========================================
 
 # 1. Login Patch (RESTORED TO SCRIPT 1 - SIMPLE UA)
@@ -135,7 +135,7 @@ discord.http.HTTPClient.request = patched_request
 discord.abc.Messageable.send = direct_send
 
 # ==========================================
-# 🎵 CUSTOM AUDIO ENGINE (FIXED SYNC v100)
+# 🎵 CUSTOM AUDIO ENGINE (MASTER CLOCK v101)
 # ==========================================
 BOT_PCM_BUFFER = io.BytesIO()
 IS_RECORDING_BOT = False
@@ -144,10 +144,10 @@ class RecordableFFmpegPCMAudio(discord.FFmpegPCMAudio):
     def read(self):
         data = super().read()
         
-        # Use precise time.time() instead of datetime to match SyncWaveSink
+        # Uses GLOBAL SESSION_START_TIME
         if IS_RECORDING_BOT and SESSION_START_TIME and data:
             try:
-                # 1. Calculate bytes needed based on GLOBAL clock
+                # 1. Calculate bytes needed from Master Clock
                 elapsed = time.time() - SESSION_START_TIME
                 expected_bytes = int(elapsed * 192000) 
                 expected_bytes -= (expected_bytes % 4) 
@@ -156,11 +156,9 @@ class RecordableFFmpegPCMAudio(discord.FFmpegPCMAudio):
                 current_bytes = BOT_PCM_BUFFER.tell()
                 padding_needed = expected_bytes - current_bytes
                 
-                # 3. FIX: Removed the 'min' cap. If we need 5s of silence, write 5s.
-                if padding_needed > 0:
-                    # Only pad if gap is significant (>10ms) to avoid micro-stutter
-                    if padding_needed > 2000:
-                        BOT_PCM_BUFFER.write(b'\x00' * padding_needed)
+                # 3. Uncapped Silence Injection
+                if padding_needed > 2000:
+                    BOT_PCM_BUFFER.write(b'\x00' * padding_needed)
                 
                 # 4. Write audio
                 BOT_PCM_BUFFER.write(data)
@@ -170,13 +168,17 @@ class RecordableFFmpegPCMAudio(discord.FFmpegPCMAudio):
         return data
 
 # ==========================================
-# 🧠 SYNC SINK (FIXED SYNC v100)
+# 🧠 SYNC SINK (MASTER CLOCK v101)
 # ==========================================
 class SyncWaveSink(discord.sinks.WaveSink):
-    def __init__(self):
+    # FIX: Accept master_start_time to align perfectly with Bot Engine
+    def __init__(self, master_start_time=None):
         super().__init__()
-        # FIX: Start timer IMMEDIATELY on init.
-        self.start_time = time.time() 
+        if master_start_time:
+            self.start_time = master_start_time
+        else:
+            self.start_time = time.time()
+        
         self.bytes_per_second = 192000
 
     def write(self, data, user_id):
@@ -185,7 +187,7 @@ class SyncWaveSink(discord.sinks.WaveSink):
 
         file = self.audio_data[user_id].file
         
-        # Consistent Clock Logic
+        # Calculates offset from the SAME Master Clock
         elapsed_seconds = time.time() - self.start_time
         expected_bytes = int(elapsed_seconds * self.bytes_per_second)
         expected_bytes = expected_bytes - (expected_bytes % 4) 
@@ -193,7 +195,7 @@ class SyncWaveSink(discord.sinks.WaveSink):
         current_bytes = file.tell()
         padding_needed = expected_bytes - current_bytes
         
-        # FIX: Removed the 'min' cap here too. Alignment is priority.
+        # Uncapped Silence Injection
         if padding_needed > 2000: 
             padding_needed = padding_needed - (padding_needed % 4)
             file.write(b'\x00' * padding_needed)
@@ -253,7 +255,6 @@ async def compress_video(filepath, target_height):
     base, ext = os.path.splitext(filepath)
     output_path = f"{base}_compressed_{target_height}p{ext}"
     
-    # FFmpeg scale command: Scale height, maintain aspect ratio, CRF 28 (compressed)
     cmd = [
         'ffmpeg', '-y', 
         '-i', filepath,
@@ -270,9 +271,9 @@ async def compress_video(filepath, target_height):
     
     if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
         return output_path
-    return filepath # Return original if fail
+    return filepath 
 
-async def split_media_smart(filepath, limit_mb=8.5): # 8.5MB to be safe for 9MB limit
+async def split_media_smart(filepath, limit_mb=8.5): 
     if not os.path.exists(filepath): return []
     size = os.path.getsize(filepath) / (1024 * 1024)
     if size <= limit_mb: return [filepath]
@@ -370,7 +371,7 @@ BASS_ACTIVE = False
 FOLLOW_MODE = False
 
 # TTS SETTINGS (FIXED ARAB VOICES)
-TTS_VOICE = "en-IN-NeerjaNeural" # Default
+TTS_VOICE = "en-IN-NeerjaNeural" 
 VOICE_MAP = {
     "default": "en-IN-NeerjaNeural",
     "india_male": "en-IN-PrabhatNeural",
@@ -420,7 +421,6 @@ async def finished_callback(sink, dest_channel, *args):
     
     IS_RECORDING_BOT = False
     
-    # Precise Duration Calculation
     if SESSION_START_TIME:
         total_duration = time.time() - SESSION_START_TIME
     else:
@@ -552,15 +552,16 @@ async def start_recording_logic(ctx, merge_flag, capture_bot=False):
     MERGE_MODE = merge_flag
     IS_RECORDING_BOT = capture_bot
     
-    # UNIFIED TIME START
+    # MASTER CLOCK: Set Global Time FIRST
     SESSION_START_TIME = time.time() 
     
     # Reset Bot Buffer
     BOT_PCM_BUFFER.seek(0)
     BOT_PCM_BUFFER.truncate(0)
 
+    # MASTER CLOCK: Pass the EXACT time to the Sink
     vc.start_recording(
-        SyncWaveSink(), 
+        SyncWaveSink(master_start_time=SESSION_START_TIME), 
         finished_callback, 
         ctx.channel 
     )
@@ -632,7 +633,7 @@ async def on_ready():
         print("✅ Secret Key Loaded.")
     else:
         print("⚠️ Warning: No 'KEY' secret found.")
-    print("✅ Nuclear Patch v100 (Uncapped Sync & Unified Time) Active.")
+    print("✅ Nuclear Patch v101 (Master Clock Sync) Active.")
 
 @bot.command()
 async def login(ctx, *, key: str):
