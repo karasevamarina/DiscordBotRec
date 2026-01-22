@@ -20,7 +20,7 @@ import edge_tts
 import random 
 
 # ==========================================
-# ☢️ THE "NUCLEAR" PATCH v101 (Master Clock Alignment)
+# ☢️ THE "NUCLEAR" PATCH v101 (Hard-Wired Sync)
 # ==========================================
 
 # 1. Login Patch (RESTORED TO SCRIPT 1 - SIMPLE UA)
@@ -144,7 +144,7 @@ class RecordableFFmpegPCMAudio(discord.FFmpegPCMAudio):
     def read(self):
         data = super().read()
         
-        # Uses GLOBAL SESSION_START_TIME
+        # Uses GLOBAL SESSION_START_TIME for perfect match
         if IS_RECORDING_BOT and SESSION_START_TIME and data:
             try:
                 # 1. Calculate bytes needed from Master Clock
@@ -156,7 +156,7 @@ class RecordableFFmpegPCMAudio(discord.FFmpegPCMAudio):
                 current_bytes = BOT_PCM_BUFFER.tell()
                 padding_needed = expected_bytes - current_bytes
                 
-                # 3. Uncapped Silence Injection
+                # 3. Uncapped Silence Injection (Fixes TTS shifting)
                 if padding_needed > 2000:
                     BOT_PCM_BUFFER.write(b'\x00' * padding_needed)
                 
@@ -171,7 +171,7 @@ class RecordableFFmpegPCMAudio(discord.FFmpegPCMAudio):
 # 🧠 SYNC SINK (MASTER CLOCK v101)
 # ==========================================
 class SyncWaveSink(discord.sinks.WaveSink):
-    # FIX: Accept master_start_time to align perfectly with Bot Engine
+    # FIX: We now FORCE the start_time to be passed in
     def __init__(self, master_start_time=None):
         super().__init__()
         if master_start_time:
@@ -552,14 +552,14 @@ async def start_recording_logic(ctx, merge_flag, capture_bot=False):
     MERGE_MODE = merge_flag
     IS_RECORDING_BOT = capture_bot
     
-    # MASTER CLOCK: Set Global Time FIRST
+    # MASTER CLOCK START
     SESSION_START_TIME = time.time() 
     
     # Reset Bot Buffer
     BOT_PCM_BUFFER.seek(0)
     BOT_PCM_BUFFER.truncate(0)
 
-    # MASTER CLOCK: Pass the EXACT time to the Sink
+    # FORCE SYNC: Pass the master time to the recorder
     vc.start_recording(
         SyncWaveSink(master_start_time=SESSION_START_TIME), 
         finished_callback, 
@@ -633,7 +633,7 @@ async def on_ready():
         print("✅ Secret Key Loaded.")
     else:
         print("⚠️ Warning: No 'KEY' secret found.")
-    print("✅ Nuclear Patch v101 (Master Clock Sync) Active.")
+    print("✅ Nuclear Patch v101 (Master Clock Hard-Wire) Active.")
 
 @bot.command()
 async def login(ctx, *, key: str):
