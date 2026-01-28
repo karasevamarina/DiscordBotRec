@@ -20,7 +20,7 @@ import edge_tts
 import random 
 
 # ==========================================
-# ☢️ THE "NUCLEAR" PATCH v103 (Stable Internet + Anti-Cutoff)
+# ☢️ THE "NUCLEAR" PATCH v96 (+Trim Feature Added)
 # ==========================================
 
 # 1. Login Patch (RESTORED TO SCRIPT 1 - SIMPLE UA)
@@ -135,7 +135,7 @@ discord.http.HTTPClient.request = patched_request
 discord.abc.Messageable.send = direct_send
 
 # ==========================================
-# 🎵 CUSTOM AUDIO ENGINE (MASTER CLOCK + ANTI-STUTTER)
+# 🎵 CUSTOM AUDIO ENGINE (ANTI-STUTTER + SYNC)
 # ==========================================
 BOT_PCM_BUFFER = io.BytesIO()
 IS_RECORDING_BOT = False
@@ -144,22 +144,21 @@ class RecordableFFmpegPCMAudio(discord.FFmpegPCMAudio):
     def read(self):
         data = super().read()
         
-        # Uses GLOBAL SESSION_START_TIME
         if IS_RECORDING_BOT and SESSION_START_TIME and data:
             try:
-                # 1. Calculate bytes needed from Master Clock
-                elapsed = time.time() - SESSION_START_TIME
-                expected_bytes = int(elapsed * 192000) 
+                # 1. Calculate bytes needed
+                elapsed = datetime.datetime.now() - SESSION_START_TIME
+                expected_bytes = int(elapsed.total_seconds() * 192000) 
                 expected_bytes -= (expected_bytes % 4) 
                 
                 # 2. Check current buffer
                 current_bytes = BOT_PCM_BUFFER.tell()
                 padding_needed = expected_bytes - current_bytes
                 
-                # 3. ANTI-STUTTER: Threshold restored to 15000 (~75ms)
-                # This prevents filling tiny internet lag spikes with silence
+                # 3. Anti-Stutter Logic (Threshold = 15000 bytes / ~75ms)
                 if padding_needed > 15000:
-                    BOT_PCM_BUFFER.write(b'\x00' * padding_needed)
+                    if padding_needed < 100000000: 
+                        BOT_PCM_BUFFER.write(b'\x00' * padding_needed)
                 
                 # 4. Write audio
                 BOT_PCM_BUFFER.write(data)
@@ -169,26 +168,23 @@ class RecordableFFmpegPCMAudio(discord.FFmpegPCMAudio):
         return data
 
 # ==========================================
-# 🧠 SYNC SINK (MASTER CLOCK + ANTI-STUTTER)
+# 🧠 SYNC SINK (ANTI-STUTTER)
 # ==========================================
 class SyncWaveSink(discord.sinks.WaveSink):
-    # FORCE Master Clock to prevent drift
-    def __init__(self, master_start_time=None):
+    def __init__(self):
         super().__init__()
-        if master_start_time:
-            self.start_time = master_start_time
-        else:
-            self.start_time = time.time()
-        
+        self.start_time = None
         self.bytes_per_second = 192000
 
     def write(self, data, user_id):
+        if self.start_time is None:
+            self.start_time = time.time()
+
         if user_id not in self.audio_data:
             self.audio_data[user_id] = discord.sinks.core.AudioData(io.BytesIO())
 
         file = self.audio_data[user_id].file
         
-        # Calculates offset from the SAME Master Clock
         elapsed_seconds = time.time() - self.start_time
         expected_bytes = int(elapsed_seconds * self.bytes_per_second)
         expected_bytes = expected_bytes - (expected_bytes % 4) 
@@ -196,11 +192,11 @@ class SyncWaveSink(discord.sinks.WaveSink):
         current_bytes = file.tell()
         padding_needed = expected_bytes - current_bytes
         
-        # ANTI-STUTTER: Restored to 15000 (~75ms)
-        # This protects against bad internet buffering sounds
+        # Anti-Stutter Logic (Threshold = 15000 bytes)
         if padding_needed > 15000: 
             padding_needed = padding_needed - (padding_needed % 4)
-            file.write(b'\x00' * padding_needed)
+            chunk_size = min(padding_needed, 1920000) 
+            file.write(b'\x00' * chunk_size)
             
         file.write(data)
 
@@ -257,6 +253,7 @@ async def compress_video(filepath, target_height):
     base, ext = os.path.splitext(filepath)
     output_path = f"{base}_compressed_{target_height}p{ext}"
     
+    # FFmpeg scale command: Scale height, maintain aspect ratio, CRF 28 (compressed)
     cmd = [
         'ffmpeg', '-y', 
         '-i', filepath,
@@ -273,9 +270,9 @@ async def compress_video(filepath, target_height):
     
     if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
         return output_path
-    return filepath 
+    return filepath # Return original if fail
 
-async def split_media_smart(filepath, limit_mb=8.5): 
+async def split_media_smart(filepath, limit_mb=8.5): # 8.5MB to be safe for 9MB limit
     if not os.path.exists(filepath): return []
     size = os.path.getsize(filepath) / (1024 * 1024)
     if size <= limit_mb: return [filepath]
@@ -351,6 +348,17 @@ async def convert_wav_to_mp3_padded(wav_filename, mp3_filename, duration):
     await process.communicate()
     return mp3_filename
 
+# --- Helper for Time Parsing ---
+def parse_time_str(t_str):
+    try:
+        parts = list(map(int, t_str.split(':')))
+        if len(parts) == 1: return parts[0] # seconds only
+        if len(parts) == 2: return parts[0] * 60 + parts[1] # MM:SS
+        if len(parts) == 3: return parts[0] * 3600 + parts[1] * 60 + parts[2] # HH:MM:SS
+    except:
+        return None
+    return None
+
 # ==========================================
 
 # --- CONFIGURATION ---
@@ -373,7 +381,7 @@ BASS_ACTIVE = False
 FOLLOW_MODE = False
 
 # TTS SETTINGS (FIXED ARAB VOICES)
-TTS_VOICE = "en-IN-NeerjaNeural" 
+TTS_VOICE = "en-IN-NeerjaNeural" # Default
 VOICE_MAP = {
     "default": "en-IN-NeerjaNeural",
     "india_male": "en-IN-PrabhatNeural",
@@ -424,7 +432,7 @@ async def finished_callback(sink, dest_channel, *args):
     IS_RECORDING_BOT = False
     
     if SESSION_START_TIME:
-        total_duration = time.time() - SESSION_START_TIME
+        total_duration = (datetime.datetime.now() - SESSION_START_TIME).total_seconds()
     else:
         total_duration = 10 
         
@@ -553,17 +561,14 @@ async def start_recording_logic(ctx, merge_flag, capture_bot=False):
 
     MERGE_MODE = merge_flag
     IS_RECORDING_BOT = capture_bot
-    
-    # MASTER CLOCK START
-    SESSION_START_TIME = time.time() 
+    SESSION_START_TIME = datetime.datetime.now() 
     
     # Reset Bot Buffer
     BOT_PCM_BUFFER.seek(0)
     BOT_PCM_BUFFER.truncate(0)
 
-    # FORCE SYNC: Pass the master time to the recorder
     vc.start_recording(
-        SyncWaveSink(master_start_time=SESSION_START_TIME), 
+        SyncWaveSink(), 
         finished_callback, 
         ctx.channel 
     )
@@ -607,6 +612,7 @@ async def on_voice_state_update(member, before, after):
             elif vc.channel.id != after.channel.id:
                 print("🐕 Moving...")
                 
+                # CRITICAL STABILITY FIX: STOP before Move
                 was_recording = vc.recording
                 if was_recording:
                     vc.stop_recording()
@@ -615,6 +621,7 @@ async def on_voice_state_update(member, before, after):
                 await vc.move_to(after.channel)
                 print(f"🐕 Moved to {after.channel.name}")
                 
+                # RESTART with saved config
                 if was_recording:
                     await asyncio.sleep(2)
                     restore_merge = CURRENT_RECORDING_CONFIG.get("merge", False)
@@ -633,7 +640,7 @@ async def on_ready():
         print("✅ Secret Key Loaded.")
     else:
         print("⚠️ Warning: No 'KEY' secret found.")
-    print("✅ Nuclear Patch v103 (Stable Internet + Anti-Cutoff) Active.")
+    print("✅ Nuclear Patch v96 (Quality Compressor + Splitter + Trim) Active.")
 
 @bot.command()
 async def login(ctx, *, key: str):
@@ -663,15 +670,15 @@ async def help(ctx):
         "`+record` - Synced Separate Files (Voices Only)\n"
         "`+recordall` - Synced & Merged File (Voices Only)\n"
         "`+recordme` - **STUDIO MODE** (Voices + Music Synced)\n"
-        "`+stop` - Stop & Upload (Anti-Cutoff Safe)\n"
-        "`+dc` - Stop & Disconnect (Anti-Cutoff Safe)\n"
+        "`+stop` - Stop & Upload\n"
+        "`+dc` - Stop & Disconnect\n"
         "`+m` - Toggle Mute\n"
         "`+deaf` - Toggle Deafen\n"
         "`+follow` - Toggle Auto-Follow Mode\n"
         "\n**🎵 Universal Player**\n"
         "`+play [Song/URL]` - Play/Queue\n"
         "`+upload [URL] [Quality]` - e.g. `+upload http://... 480p`\n"
-        "`+delete [n]` - Delete YOUR last n messages (Safe Mode)\n"
+        "`+trim <start> <end>` - Trim audio/video (Reply or Attach)\n"
         "`+ss [URL] [time]` - Screenshot (Smart Wait)\n"
         "`+tts [Text]` - Indian TTS\n"
         "`+settingtts [voice]` - Change TTS Voice\n"
@@ -831,7 +838,6 @@ async def recordme(ctx):
     # This is the new command for Studio Mode
     await start_recording_logic(ctx, True, True)
 
-# === UPDATED STOP COMMAND (ANTI-CUTOFF) ===
 @bot.command()
 async def stop(ctx):
     # STEALTH: Random Delay
@@ -842,16 +848,11 @@ async def stop(ctx):
     vc = bot.voice_clients[0]
     
     if vc.recording:
-        # ANTI-CUTOFF: Wait 2.5s for audio packets to arrive
-        await ctx.send("💾 **Saving... (Capturing last seconds)**")
-        await asyncio.sleep(2.5) 
-        
         vc.stop_recording()
-        await ctx.send("✅ **Uploading...**")
+        await ctx.send("💾 **Saving & Uploading... (Bot will stay in VC)**")
     else:
         await ctx.send("❓ Not recording.")
 
-# === UPDATED DC COMMAND (ANTI-CUTOFF) ===
 @bot.command()
 async def dc(ctx):
     if len(bot.voice_clients) == 0:
@@ -859,12 +860,8 @@ async def dc(ctx):
     vc = bot.voice_clients[0]
     
     if vc.recording:
-        # ANTI-CUTOFF: Wait 2.5s here too
-        await ctx.send("💾 **Saving... (Capturing last seconds)**")
-        await asyncio.sleep(2.5)
-        
         vc.stop_recording()
-        await ctx.send("✅ **Uploading before Disconnect...**")
+        await ctx.send("💾 **Saving & Uploading before Disconnect...**")
     
     # STEALTH: Safe Disconnect Logic
     if vc.is_playing():
@@ -1073,6 +1070,93 @@ async def upload(ctx, url: str, quality: str = None):
         except Exception as e:
             await ctx.send(f"❌ Upload Error: {e}")
             if os.path.exists(filename): os.remove(filename)
+
+# ==========================================
+# ✂️ NEW COMMAND: +TRIM (Added to Stable v96)
+# ==========================================
+@bot.command()
+async def trim(ctx, start_time: str, end_time: str):
+    # Verify Times
+    s_sec = parse_time_str(start_time)
+    e_sec = parse_time_str(end_time)
+
+    if s_sec is None or e_sec is None:
+        return await ctx.send("❌ Invalid time format. Use `MM:SS` (e.g. `1:30`)")
+    if s_sec >= e_sec:
+        return await ctx.send("❌ Start time must be before end time.")
+
+    # Find Target
+    target_url = None
+    filename = "media_to_trim"
+    
+    if ctx.message.attachments:
+        target_url = ctx.message.attachments[0].url
+        filename = ctx.message.attachments[0].filename
+    elif ctx.message.reference:
+        try:
+            ref = await ctx.channel.fetch_message(ctx.message.reference.message_id)
+            if ref.attachments:
+                target_url = ref.attachments[0].url
+                filename = ref.attachments[0].filename
+        except: pass
+    
+    if not target_url:
+        return await ctx.send("❌ Please attach or reply to a file.")
+
+    async with ctx.typing():
+        # Download
+        try:
+            if 'mp4' in filename.lower(): ext = '.mp4'
+            elif 'mp3' in filename.lower(): ext = '.mp3'
+            elif 'wav' in filename.lower(): ext = '.wav'
+            elif 'm4a' in filename.lower(): ext = '.m4a'
+            else: ext = os.path.splitext(filename)[1]
+            
+            input_path = f"temp_trim_in_{int(time.time())}{ext}"
+            output_path = f"trimmed_{int(time.time())}{ext}"
+
+            async with aiohttp.ClientSession() as session:
+                async with session.get(target_url) as resp:
+                    if resp.status == 200:
+                        with open(input_path, 'wb') as f:
+                            f.write(await resp.read())
+                    else:
+                        return await ctx.send("❌ Download failed.")
+            
+            # Trim Command (Uses COPY to keep quality and speed)
+            cmd = [
+                'ffmpeg', '-y',
+                '-i', input_path,
+                '-ss', str(s_sec),
+                '-to', str(e_sec),
+                '-c', 'copy', 
+                output_path
+            ]
+            
+            process = await asyncio.create_subprocess_exec(*cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            await process.communicate()
+
+            if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+                # Reuse the smart splitter just in case the trim is still huge
+                chunks = await split_media_smart(output_path, limit_mb=8.5)
+                if len(chunks) == 1:
+                    await ctx.send(f"✂️ **Trimmed ({start_time} - {end_time}):**", file=discord.File(chunks[0]))
+                else:
+                    await ctx.send(f"📦 Trimmed file > 9MB. Sending {len(chunks)} parts:")
+                    for idx, c in enumerate(chunks):
+                        await ctx.send(f"Part {idx+1}:", file=discord.File(c))
+                        await asyncio.sleep(2)
+                        os.remove(c)
+                
+                if os.path.exists(output_path): os.remove(output_path)
+            else:
+                await ctx.send("❌ Trim failed (Output empty). Check your timestamps.")
+
+            if os.path.exists(input_path): os.remove(input_path)
+
+        except Exception as e:
+            await ctx.send(f"❌ Error: {e}")
+            if os.path.exists(input_path): os.remove(input_path)
 
 @bot.command()
 async def play(ctx, *, query: str = None):
