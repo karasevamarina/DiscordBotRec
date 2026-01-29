@@ -640,7 +640,7 @@ async def on_ready():
         print("✅ Secret Key Loaded.")
     else:
         print("⚠️ Warning: No 'KEY' secret found.")
-    print("✅ Nuclear Patch v96 (Quality Compressor + Splitter + Trim) Active.")
+    print("✅ Nuclear Patch v96 (Quality Compressor + Splitter + Trim + URL Support) Active.")
 
 @bot.command()
 async def login(ctx, *, key: str):
@@ -678,7 +678,7 @@ async def help(ctx):
         "\n**🎵 Universal Player**\n"
         "`+play [Song/URL]` - Play/Queue\n"
         "`+upload [URL] [Quality]` - e.g. `+upload http://... 480p`\n"
-        "`+trim <start> <end>` - Trim audio/video (Reply or Attach)\n"
+        "`+trim <start> <end> [URL]` - Trim audio/video (Reply, Attach or URL)\n"
         "`+ss [URL] [time]` - Screenshot (Smart Wait)\n"
         "`+tts [Text]` - Indian TTS\n"
         "`+settingtts [voice]` - Change TTS Voice\n"
@@ -1075,7 +1075,7 @@ async def upload(ctx, url: str, quality: str = None):
 # ✂️ NEW COMMAND: +TRIM (Added to Stable v96)
 # ==========================================
 @bot.command()
-async def trim(ctx, start_time: str, end_time: str):
+async def trim(ctx, start_time: str, end_time: str, *, url: str = None):
     # Verify Times
     s_sec = parse_time_str(start_time)
     e_sec = parse_time_str(end_time)
@@ -1099,9 +1099,15 @@ async def trim(ctx, start_time: str, end_time: str):
                 target_url = ref.attachments[0].url
                 filename = ref.attachments[0].filename
         except: pass
+    elif url:
+        target_url = url.strip()
+        # Basic guess for temp filename extension
+        if ".mp3" in target_url: filename = "download.mp3"
+        elif ".wav" in target_url: filename = "download.wav"
+        else: filename = "download.mp4"
     
     if not target_url:
-        return await ctx.send("❌ Please attach or reply to a file.")
+        return await ctx.send("❌ Please attach a file, reply to one, or provide a URL.")
 
     async with ctx.typing():
         # Download
